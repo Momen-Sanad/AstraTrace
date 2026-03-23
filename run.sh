@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
-TARGET_NAME="Lab4"
+TARGET_NAME="astratrace_app"
 CONFIG="${1:-Release}"
 case "${CONFIG,,}" in
     debug|release|relwithdebinfo|minsizerel)

@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $RootDir "build"
-$TargetName = "Lab4"
+$TargetName = "astratrace_app"
 
 $KnownConfigs = @("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
 if ($KnownConfigs -notcontains $Config) {

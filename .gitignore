@@ -11,6 +11,8 @@
 /install_manifest.txt
 /Makefile
 
+/screenshots/
+
 # Local tooling/deps
 /.pydeps/
 

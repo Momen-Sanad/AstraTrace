@@ -1,4 +1,6 @@
 #include "scene/world/scene_object.hpp"
+// median heuristic in low-level bvh
+// bvh top-level too
 
 namespace {
 
@@ -25,7 +27,7 @@ bool raySphereMayHit(
     return t0 <= max_distance;
 }
 
-} // namespace
+}
 
 bool SceneObject::intersect(const Ray& ray, RayHit& hit) const {
     if(is_identity_transform) {

@@ -1,3 +1,11 @@
+/*
+App reads the scene path from CLI, then calls glTF loader
+Loader picks .glb vs .gltf by extension and uses TinyGLTF LoadBinaryFromFile / LoadASCIIFromFile
+builds PBR materials/textures (base color, normal, occlusion, metallic/roughness, emissive, emissive strength)
+traverses scene nodes, applies world transforms, imports mesh primitives (triangles only), 
+recomputes normals/tangents when missing
+imports camera (perspective only) and punctual lights (directional/point/spot)
+*/
 #include "io/gltf/gltf_loader.hpp"
 
 #include <algorithm>

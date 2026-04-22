@@ -16,6 +16,13 @@ add_subdirectory(vendor/glm EXCLUDE_FROM_ALL)
 find_package(OpenMP)
 find_package(Python3 COMPONENTS Interpreter)
 
+add_library(mikktspace STATIC
+    vendor/mikktspace/mikktspace.c
+)
+target_include_directories(mikktspace PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/mikktspace
+)
+
 add_library(imgui STATIC
     vendor/imgui/imgui.cpp
     vendor/imgui/imgui_draw.cpp
@@ -86,6 +93,7 @@ target_include_directories(astratrace_io_gltf PUBLIC
 target_link_libraries(astratrace_io_gltf PUBLIC
     astratrace_scene
     astratrace_core
+    mikktspace
     glm
 )
 

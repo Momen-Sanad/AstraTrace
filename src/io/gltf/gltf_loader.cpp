@@ -12,8 +12,10 @@ imports camera (perspective only) and punctual lights (directional/point/spot)
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -29,6 +31,7 @@ imports camera (perspective only) and punctual lights (directional/point/spot)
 #define TINYGLTF_NO_STB_IMAGE_WRITE
 #define TINYGLTF_NO_INCLUDE_JSON
 #include <nlohmann/json.hpp>
+#include <mikktspace.h>
 #include <tiny_gltf.h>
 
 namespace {
@@ -230,6 +233,150 @@ glm::vec3 chooseOrthogonal(const glm::vec3& normal) {
         return glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal));
     }
     return glm::normalize(glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), normal));
+}
+
+struct MikktspaceUserData {
+    const std::vector<glm::vec3>* positions = nullptr;
+    const std::vector<glm::vec3>* normals = nullptr;
+    const std::vector<glm::vec2>* uvs = nullptr;
+    const std::vector<uint32_t>* indices = nullptr;
+    std::vector<glm::vec3>* face_tangents = nullptr;
+    std::vector<float>* face_signs = nullptr;
+};
+
+int mikktGetNumFaces(const SMikkTSpaceContext* context) {
+    const auto* user = static_cast<const MikktspaceUserData*>(context->m_pUserData);
+    if(!user || !user->indices) return 0;
+    return static_cast<int>(user->indices->size() / 3);
+}
+
+int mikktGetNumVerticesOfFace(const SMikkTSpaceContext* context, int iFace) {
+    const auto* user = static_cast<const MikktspaceUserData*>(context->m_pUserData);
+    if(!user || !user->indices) return 0;
+    const int face_count = static_cast<int>(user->indices->size() / 3);
+    if(iFace < 0 || iFace >= face_count) return 0;
+    return 3;
+}
+
+uint32_t mikktGetVertexIndex(const MikktspaceUserData& user, int iFace, int iVert) {
+    const std::size_t face_vertex_index = static_cast<std::size_t>(iFace) * 3u + static_cast<std::size_t>(iVert);
+    if(face_vertex_index >= user.indices->size()) return 0u;
+    return (*user.indices)[face_vertex_index];
+}
+
+void mikktGetPosition(const SMikkTSpaceContext* context, float out[], int iFace, int iVert) {
+    const auto* user = static_cast<const MikktspaceUserData*>(context->m_pUserData);
+    if(!user || !user->positions || !user->indices) {
+        out[0] = out[1] = out[2] = 0.0f;
+        return;
+    }
+
+    uint32_t index = mikktGetVertexIndex(*user, iFace, iVert);
+    if(index >= user->positions->size()) {
+        out[0] = out[1] = out[2] = 0.0f;
+        return;
+    }
+
+    const glm::vec3& p = (*user->positions)[index];
+    out[0] = p.x;
+    out[1] = p.y;
+    out[2] = p.z;
+}
+
+void mikktGetNormal(const SMikkTSpaceContext* context, float out[], int iFace, int iVert) {
+    const auto* user = static_cast<const MikktspaceUserData*>(context->m_pUserData);
+    if(!user || !user->normals || !user->indices) {
+        out[0] = 0.0f;
+        out[1] = 1.0f;
+        out[2] = 0.0f;
+        return;
+    }
+
+    uint32_t index = mikktGetVertexIndex(*user, iFace, iVert);
+    if(index >= user->normals->size()) {
+        out[0] = 0.0f;
+        out[1] = 1.0f;
+        out[2] = 0.0f;
+        return;
+    }
+
+    const glm::vec3& n = (*user->normals)[index];
+    out[0] = n.x;
+    out[1] = n.y;
+    out[2] = n.z;
+}
+
+void mikktGetTexCoord(const SMikkTSpaceContext* context, float out[], int iFace, int iVert) {
+    const auto* user = static_cast<const MikktspaceUserData*>(context->m_pUserData);
+    if(!user || !user->uvs || !user->indices) {
+        out[0] = 0.0f;
+        out[1] = 0.0f;
+        return;
+    }
+
+    uint32_t index = mikktGetVertexIndex(*user, iFace, iVert);
+    if(index >= user->uvs->size()) {
+        out[0] = 0.0f;
+        out[1] = 0.0f;
+        return;
+    }
+
+    const glm::vec2& uv = (*user->uvs)[index];
+    out[0] = uv.x;
+    out[1] = uv.y;
+}
+
+void mikktSetTSpaceBasic(
+    const SMikkTSpaceContext* context,
+    const float tangent[],
+    float sign,
+    int iFace,
+    int iVert
+) {
+    auto* user = static_cast<MikktspaceUserData*>(context->m_pUserData);
+    if(!user || !user->face_tangents || !user->face_signs) return;
+
+    const std::size_t face_vertex_index = static_cast<std::size_t>(iFace) * 3u + static_cast<std::size_t>(iVert);
+    if(face_vertex_index >= user->face_tangents->size()) return;
+
+    (*user->face_tangents)[face_vertex_index] = glm::vec3(tangent[0], tangent[1], tangent[2]);
+    (*user->face_signs)[face_vertex_index] = sign;
+}
+
+bool generateMikktspaceTangents(
+    const std::vector<glm::vec3>& positions,
+    const std::vector<glm::vec3>& normals,
+    const std::vector<glm::vec2>& uvs,
+    const std::vector<uint32_t>& indices,
+    std::vector<glm::vec3>& face_tangents,
+    std::vector<float>& face_signs
+) {
+    if(indices.size() < 3 || (indices.size() % 3) != 0) return false;
+
+    face_tangents.assign(indices.size(), glm::vec3(0.0f));
+    face_signs.assign(indices.size(), 1.0f);
+
+    MikktspaceUserData user_data{
+        .positions = &positions,
+        .normals = &normals,
+        .uvs = &uvs,
+        .indices = &indices,
+        .face_tangents = &face_tangents,
+        .face_signs = &face_signs
+    };
+
+    SMikkTSpaceInterface iface{};
+    iface.m_getNumFaces = mikktGetNumFaces;
+    iface.m_getNumVerticesOfFace = mikktGetNumVerticesOfFace;
+    iface.m_getPosition = mikktGetPosition;
+    iface.m_getNormal = mikktGetNormal;
+    iface.m_getTexCoord = mikktGetTexCoord;
+    iface.m_setTSpaceBasic = mikktSetTSpaceBasic;
+
+    SMikkTSpaceContext context{};
+    context.m_pInterface = &iface;
+    context.m_pUserData = &user_data;
+    return genTangSpaceDefault(&context) != 0;
 }
 
 const tinygltf::Image* getTextureImage(const tinygltf::Model& model, int texture_index) {
@@ -598,6 +745,10 @@ std::shared_ptr<TriangleMesh> buildMeshFromPrimitive(
 
     std::vector<glm::vec3> tangents(vertex_count, glm::vec3(0.0f));
     std::vector<glm::vec3> bitangents(vertex_count, glm::vec3(0.0f));
+    std::vector<glm::vec3> face_tangents;
+    std::vector<float> face_signs;
+    bool has_face_tangents = false;
+
     if(has_tangents) {
         for(std::size_t i = 0; i < vertex_count; ++i) {
             glm::vec3 t = glm::vec3(tangent4[i]);
@@ -608,7 +759,20 @@ std::shared_ptr<TriangleMesh> buildMeshFromPrimitive(
             tangents[i] = t;
             bitangents[i] = b;
         }
+    } else if(has_uv && generateMikktspaceTangents(
+        positions,
+        normals,
+        uvs,
+        indices,
+        face_tangents,
+        face_signs
+    )) {
+        has_face_tangents = true;
     } else {
+        if(has_uv) {
+            appendLine(warnings, "Mikktspace tangent generation failed. Using fallback tangent generation.");
+        }
+
         std::vector<glm::vec3> tan_accum(vertex_count, glm::vec3(0.0f));
         std::vector<glm::vec3> bitan_accum(vertex_count, glm::vec3(0.0f));
 
@@ -664,23 +828,48 @@ std::shared_ptr<TriangleMesh> buildMeshFromPrimitive(
     glm::mat3 world3 = glm::mat3(world_transform);
     glm::mat3 normal_matrix = glm::mat3(glm::transpose(glm::inverse(world_transform)));
 
-    std::vector<Vertex> transformed_vertices(vertex_count);
-    for(std::size_t i = 0; i < vertex_count; ++i) {
-        glm::vec3 position = glm::vec3(world_transform * glm::vec4(positions[i], 1.0f));
-        glm::vec3 normal = glm::normalize(normal_matrix * normals[i]);
-        glm::vec3 tangent = glm::normalize(world3 * tangents[i]);
-        tangent = glm::normalize(tangent - normal * glm::dot(normal, tangent));
-        glm::vec3 bitangent = glm::normalize(glm::cross(normal, tangent));
-        if(glm::dot(bitangent, world3 * bitangents[i]) < 0.0f) bitangent *= -1.0f;
+    auto buildWorldVertex = [&](uint32_t vertex_index, const glm::vec3& tangent_local, const glm::vec3& bitangent_local) {
+        glm::vec3 local_normal = normals[vertex_index];
+        glm::vec3 world_normal = glm::normalize(normal_matrix * local_normal);
+        if(glm::dot(world_normal, world_normal) <= EPSILON) {
+            world_normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        }
 
-        transformed_vertices[i] = Vertex{
-            position,
-            normal,
-            tangent,
-            bitangent,
-            uvs[i]
+        glm::vec3 world_tangent = world3 * tangent_local;
+        if(glm::dot(world_tangent, world_tangent) <= EPSILON) {
+            world_tangent = chooseOrthogonal(world_normal);
+        } else {
+            world_tangent = glm::normalize(world_tangent);
+            world_tangent = world_tangent - world_normal * glm::dot(world_normal, world_tangent);
+            if(glm::dot(world_tangent, world_tangent) <= EPSILON) {
+                world_tangent = chooseOrthogonal(world_normal);
+            } else {
+                world_tangent = glm::normalize(world_tangent);
+            }
+        }
+
+        glm::vec3 world_bitangent = glm::cross(world_normal, world_tangent);
+        if(glm::dot(world_bitangent, world_bitangent) <= EPSILON) {
+            world_bitangent = chooseOrthogonal(world_normal);
+        } else {
+            world_bitangent = glm::normalize(world_bitangent);
+        }
+
+        glm::vec3 source_world_bitangent = world3 * bitangent_local;
+        if(glm::dot(source_world_bitangent, source_world_bitangent) > EPSILON) {
+            if(glm::dot(world_bitangent, source_world_bitangent) < 0.0f) {
+                world_bitangent *= -1.0f;
+            }
+        }
+
+        return Vertex{
+            glm::vec3(world_transform * glm::vec4(positions[vertex_index], 1.0f)),
+            world_normal,
+            world_tangent,
+            world_bitangent,
+            uvs[vertex_index]
         };
-    }
+    };
 
     std::vector<Triangle> triangles;
     triangles.reserve(indices.size() / 3);
@@ -689,7 +878,49 @@ std::shared_ptr<TriangleMesh> buildMeshFromPrimitive(
         uint32_t i1 = indices[i + 1];
         uint32_t i2 = indices[i + 2];
         if(i0 >= vertex_count || i1 >= vertex_count || i2 >= vertex_count) continue;
-        triangles.emplace_back(transformed_vertices[i0], transformed_vertices[i1], transformed_vertices[i2]);
+
+        auto getLocalBasis = [&](uint32_t vertex_index, std::size_t corner_index) {
+            glm::vec3 normal = normals[vertex_index];
+            glm::vec3 tangent(0.0f);
+            glm::vec3 bitangent(0.0f);
+
+            if(has_face_tangents) {
+                tangent = face_tangents[corner_index];
+                if(glm::dot(tangent, tangent) <= EPSILON) {
+                    tangent = chooseOrthogonal(normal);
+                } else {
+                    tangent = glm::normalize(tangent - normal * glm::dot(normal, tangent));
+                    if(glm::dot(tangent, tangent) <= EPSILON) {
+                        tangent = chooseOrthogonal(normal);
+                    } else {
+                        tangent = glm::normalize(tangent);
+                    }
+                }
+
+                bitangent = glm::cross(normal, tangent);
+                if(glm::dot(bitangent, bitangent) <= EPSILON) {
+                    bitangent = chooseOrthogonal(normal);
+                } else {
+                    bitangent = glm::normalize(bitangent);
+                }
+                if(face_signs[corner_index] < 0.0f) bitangent *= -1.0f;
+            } else {
+                tangent = tangents[vertex_index];
+                bitangent = bitangents[vertex_index];
+            }
+
+            return std::pair<glm::vec3, glm::vec3>{tangent, bitangent};
+        };
+
+        auto [t0, b0] = getLocalBasis(i0, i + 0);
+        auto [t1, b1] = getLocalBasis(i1, i + 1);
+        auto [t2, b2] = getLocalBasis(i2, i + 2);
+
+        triangles.emplace_back(
+            buildWorldVertex(i0, t0, b0),
+            buildWorldVertex(i1, t1, b1),
+            buildWorldVertex(i2, t2, b2)
+        );
     }
 
     if(triangles.empty()) return nullptr;

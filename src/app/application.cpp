@@ -61,9 +61,24 @@ int Application::run(int argc, char** argv) {
         return -1;
     }
 
-    SDL_Surface* surface = SDL_GetWindowSurface(window);
-    if(!surface) {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to get window surface: %s", SDL_GetError());
+    SDL_Renderer* sdl_renderer = SDL_CreateRenderer(window, nullptr);
+    if(!sdl_renderer) {
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to create SDL renderer: %s", SDL_GetError());
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return -1;
+    }
+
+    SDL_Texture* frame_texture = SDL_CreateTexture(
+        sdl_renderer,
+        SDL_PIXELFORMAT_ABGR8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT
+    );
+    if(!frame_texture) {
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to create frame texture: %s", SDL_GetError());
+        SDL_DestroyRenderer(sdl_renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return -1;
@@ -102,9 +117,21 @@ int Application::run(int argc, char** argv) {
     );
 
     auto renderer = render::createRenderer(backend);
-    FrameLoop frame_loop(window, surface, buffer, scene, camera, controller, *renderer);
+    FrameLoop frame_loop(
+        window,
+        sdl_renderer,
+        frame_texture,
+        buffer,
+        scene,
+        camera,
+        controller,
+        *renderer,
+        scene_path
+    );
     int exit_code = frame_loop.run();
 
+    SDL_DestroyTexture(frame_texture);
+    SDL_DestroyRenderer(sdl_renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return exit_code;

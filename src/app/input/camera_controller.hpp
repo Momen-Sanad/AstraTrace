@@ -11,6 +11,7 @@ public:
 
     void handleEvent(const SDL_Event& event); // Call for every event to capture mouse/keyboard input.
     void update(float dt); // Call every frame to update the camera position and orientation.
+    void resetFromCamera(); // Re-sync internal yaw/pitch/fov from the current camera state.
 
     // Define Setters
     inline void setSpeed(float speed) { this->speed = speed; } // The default movement speed of the camera.

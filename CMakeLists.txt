@@ -16,6 +16,20 @@ add_subdirectory(vendor/glm EXCLUDE_FROM_ALL)
 find_package(OpenMP)
 find_package(Python3 COMPONENTS Interpreter)
 
+add_library(imgui STATIC
+    vendor/imgui/imgui.cpp
+    vendor/imgui/imgui_draw.cpp
+    vendor/imgui/imgui_tables.cpp
+    vendor/imgui/imgui_widgets.cpp
+    vendor/imgui/backends/imgui_impl_sdl3.cpp
+    vendor/imgui/backends/imgui_impl_sdlrenderer3.cpp
+)
+target_include_directories(imgui PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/backends
+)
+target_link_libraries(imgui PUBLIC SDL3::SDL3-shared)
+
 set(ASTRATRACE_PUBLIC_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -133,6 +147,7 @@ target_link_libraries(astratrace_app PRIVATE
     astratrace_render_gpu
     astratrace_scene
     astratrace_core
+    imgui
     SDL3::SDL3-shared
     glm
 )

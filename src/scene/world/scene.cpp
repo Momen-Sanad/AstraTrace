@@ -2,6 +2,13 @@
 
 #include <SDL3/SDL_log.h>
 
+void Scene::clear() {
+    objects.clear();
+    lights.clear();
+    background_color = Color(0.0f);
+    ambient = Color(0.0f);
+}
+
 void Scene::update() {
     for(auto& object : objects) {
         object->update();

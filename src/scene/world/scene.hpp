@@ -25,6 +25,7 @@ public:
     }
 
     void addLight(const std::shared_ptr<Light>& light) { lights.push_back(light); }
+    void clear();
 
     void setBackgroundColor(Color color) { background_color = color; }
     void setAmbient(Color color) { ambient = color; }

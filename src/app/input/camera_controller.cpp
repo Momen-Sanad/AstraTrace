@@ -2,6 +2,21 @@
 
 CameraController::CameraController(SDL_Window* window, Camera& camera) : 
     window(window), camera(camera) {
+    resetFromCamera();
+}
+
+void CameraController::resetFromCamera() {
+    if(enabled) {
+        SDL_SetWindowRelativeMouseMode(window, false);
+        enabled = false;
+    }
+
+    for(bool& key_state : keyStates) {
+        key_state = false;
+    }
+    mouse_motion = glm::vec2(0.0f);
+    wheel_motion = 0.0f;
+
     glm::vec3 direction = camera.getForward();
     yaw = SDL_atan2f(-direction.z, direction.x);
     pitch = SDL_asinf(direction.y);

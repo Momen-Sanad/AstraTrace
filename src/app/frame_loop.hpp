@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <memory>
 #include <utility>
 #include <vector>
 #include <SDL3/SDL.h>
@@ -22,7 +23,7 @@ public:
         Scene& scene,
         Camera& camera,
         CameraController& controller,
-        render::IRenderer& renderer,
+        render::RenderBackend initial_backend,
         std::string initial_scene_path
     )
         : window(window),
@@ -32,7 +33,9 @@ public:
           scene(scene),
           camera(camera),
           controller(controller),
-          renderer(renderer),
+          active_backend(initial_backend),
+          selected_backend(initial_backend),
+          renderer(render::createRenderer(initial_backend)),
           active_scene_path(std::move(initial_scene_path)) {}
 
     int run();
@@ -40,6 +43,7 @@ public:
 private:
     void refreshSceneList();
     bool reloadScene(const std::string& scene_path);
+    bool switchBackend(render::RenderBackend backend);
 
     SDL_Window* window = nullptr;
     SDL_Renderer* sdl_renderer = nullptr;
@@ -48,7 +52,9 @@ private:
     Scene& scene;
     Camera& camera;
     CameraController& controller;
-    render::IRenderer& renderer;
+    render::RenderBackend active_backend = render::RenderBackend::CpuWhitted;
+    render::RenderBackend selected_backend = render::RenderBackend::CpuWhitted;
+    std::unique_ptr<render::IRenderer> renderer;
 
     std::string active_scene_path;
     std::vector<std::string> scene_paths;

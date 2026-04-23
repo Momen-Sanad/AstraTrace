@@ -116,7 +116,6 @@ int Application::run(int argc, char** argv) {
         load_result.camera_loaded ? "true" : "false"
     );
 
-    auto renderer = render::createRenderer(backend);
     FrameLoop frame_loop(
         window,
         sdl_renderer,
@@ -125,7 +124,7 @@ int Application::run(int argc, char** argv) {
         scene,
         camera,
         controller,
-        *renderer,
+        backend,
         scene_path
     );
     int exit_code = frame_loop.run();

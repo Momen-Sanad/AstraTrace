@@ -14,6 +14,9 @@
 
 namespace {
 constexpr const char* WINDOW_TITLE = "AstraTrace";
+constexpr const char* BACKEND_LABEL_CPU_WHITTED = "CPU Whitted";
+constexpr const char* BACKEND_LABEL_CPU_PATH = "CPU Path";
+constexpr const char* BACKEND_LABEL_GPU_PATH = "GPU Path";
 
 std::string toLowerAscii(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
@@ -97,6 +100,30 @@ void takeScreenshotFromBuffer(Image<Color8>& buffer) {
 
     takeScreenshot(screenshot);
     SDL_DestroySurface(screenshot);
+}
+
+const char* backendToLabel(render::RenderBackend backend) {
+    switch(backend) {
+    case render::RenderBackend::CpuPath:
+        return BACKEND_LABEL_CPU_PATH;
+    case render::RenderBackend::GpuPath:
+        return BACKEND_LABEL_GPU_PATH;
+    case render::RenderBackend::CpuWhitted:
+    default:
+        return BACKEND_LABEL_CPU_WHITTED;
+    }
+}
+
+render::RenderBackend backendFromIndex(int index) {
+    switch(index) {
+    case 1:
+        return render::RenderBackend::CpuPath;
+    case 2:
+        return render::RenderBackend::GpuPath;
+    case 0:
+    default:
+        return render::RenderBackend::CpuWhitted;
+    }
 }
 
 } // namespace
@@ -198,6 +225,31 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
     return true;
 }
 
+bool FrameLoop::switchBackend(render::RenderBackend backend) {
+    if(backend == active_backend) {
+        status_message = std::string("Backend already active: ") + backendToLabel(active_backend);
+        return true;
+    }
+
+    std::unique_ptr<render::IRenderer> new_renderer = render::createRenderer(backend);
+    if(!new_renderer) {
+        status_message = std::string("Failed to initialize backend: ") + backendToLabel(backend);
+        SDL_LogError(
+            SDL_LOG_CATEGORY_ERROR,
+            "Failed to initialize renderer backend: %s",
+            backendToLabel(backend)
+        );
+        return false;
+    }
+
+    renderer = std::move(new_renderer);
+    active_backend = backend;
+    selected_backend = backend;
+    status_message = std::string("Backend switched to: ") + backendToLabel(active_backend);
+    SDL_Log("Renderer backend switched to: %s", backendToLabel(active_backend));
+    return true;
+}
+
 int FrameLoop::run() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -257,7 +309,9 @@ int FrameLoop::run() {
 
         controller.update(delta_time);
         scene.update();
-        renderer.render(scene, camera, buffer);
+        if(renderer) {
+            renderer->render(scene, camera, buffer);
+        }
 
         if(!SDL_UpdateTexture(
             frame_texture,
@@ -302,6 +356,25 @@ int FrameLoop::run() {
                 refreshSceneList();
             }
         }
+
+        ImGui::Separator();
+        if(ImGui::BeginCombo("Backend", backendToLabel(selected_backend))) {
+            for(int i = 0; i < 3; ++i) {
+                const render::RenderBackend backend_option = backendFromIndex(i);
+                bool selected = (selected_backend == backend_option);
+                if(ImGui::Selectable(backendToLabel(backend_option), selected)) {
+                    selected_backend = backend_option;
+                }
+                if(selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        if(ImGui::Button("Apply Backend")) {
+            switchBackend(selected_backend);
+        }
+
+        ImGui::Text("Active backend: %s", backendToLabel(active_backend));
 
         ImGui::Separator();
         ImGui::Text("Current: %s", active_scene_path.c_str());

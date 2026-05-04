@@ -12,6 +12,7 @@ public:
           color(color) {}
 
     LightEvaluation evaluate(glm::vec3 point) const override;
+    float power() const override { return 2.0f * 3.1415926535f * (1.0f - cos_angles.y) * glm::max(color.r, glm::max(color.g, color.b)); }
 
     void setDirection(const glm::vec3& value) { direction = glm::normalize(value); }
     void setPosition(const glm::vec3& value) { position = value; }

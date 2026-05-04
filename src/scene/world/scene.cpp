@@ -3,15 +3,26 @@
 #include <SDL3/SDL_log.h>
 
 void Scene::clear() {
+    next_object_id = 0;
     objects.clear();
     lights.clear();
+    path_lights.clear();
     background_color = Color(0.0f);
     ambient = Color(0.0f);
 }
 
 void Scene::update() {
+    path_lights.clear();
+    path_lights.reserve(lights.size() + objects.size());
+    for(const auto& light : lights) {
+        path_lights.push_back(light);
+    }
+
     for(auto& object : objects) {
         object->update();
+        if(object->isEmissive()) {
+            path_lights.push_back(object);
+        }
     }
 }
 
@@ -48,4 +59,5 @@ void Scene::printStats() const {
     SDL_Log("Scene Statistics:");
     SDL_Log("\t- Object Count: %llu", objects.size());
     SDL_Log("\t- Light Count: %llu", lights.size());
+    SDL_Log("\t- Path Light Count: %llu", path_lights.size());
 }

@@ -7,6 +7,35 @@ AABB Triangle::getBounds() const {
     return bounds;
 }
 
+float Triangle::surfaceArea() const {
+    return 0.5f * glm::length(glm::cross(v1.position - v0.position, v2.position - v0.position));
+}
+
+glm::vec3 Triangle::geometricNormal(const Ray& ray, const RayHit& hit) const {
+    (void)hit;
+    glm::vec3 normal = glm::normalize(glm::cross(v1.position - v0.position, v2.position - v0.position));
+    if(glm::dot(ray.direction, normal) > 0.0f) normal *= -1.0f;
+    return normal;
+}
+
+void Triangle::samplePoint(
+    const glm::vec3& u,
+    glm::vec3& position,
+    glm::vec3& normal,
+    glm::vec2& uv,
+    float& pdf
+) const {
+    float su0 = glm::sqrt(glm::clamp(u.x, 0.0f, 1.0f));
+    float w0 = 1.0f - su0;
+    float w1 = su0 * (1.0f - glm::clamp(u.y, 0.0f, 1.0f));
+    float w2 = su0 * glm::clamp(u.y, 0.0f, 1.0f);
+    position = w0 * v0.position + w1 * v1.position + w2 * v2.position;
+    normal = glm::normalize(glm::cross(v1.position - v0.position, v2.position - v0.position));
+    uv = w0 * v0.uv + w1 * v1.uv + w2 * v2.uv;
+    float area = surfaceArea();
+    pdf = area > 0.0f ? 1.0f / area : 0.0f;
+}
+
 bool Triangle::intersect(const Ray& ray, RayHit& hit) const {
     const float epsilon = 1e-8f;
     glm::vec3 edge1 = v1.position - v0.position;

@@ -19,7 +19,7 @@ public:
         glm::quat rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
         glm::vec3 scale = glm::vec3(1.0f)
     ) {
-        auto object = std::make_shared<SceneObject>(shape, material, position, rotation, scale);
+        auto object = std::make_shared<SceneObject>(++next_object_id, shape, material, position, rotation, scale);
         objects.push_back(object);
         return object;
     }
@@ -33,6 +33,8 @@ public:
     Color getBackgroundColor() const { return background_color; }
     Color getAmbient() const { return ambient; }
     const std::vector<std::shared_ptr<Light>>& getLights() const { return lights; }
+    const std::vector<std::shared_ptr<Light>>& getPathLights() const { return path_lights; }
+    const std::vector<std::shared_ptr<SceneObject>>& getObjects() const { return objects; }
 
     void update();
     bool anyHit(const Ray& ray, float max_distance = std::numeric_limits<float>::max()) const;
@@ -40,8 +42,10 @@ public:
     void printStats() const;
 
 private:
+    ObjectID next_object_id = 0;
     std::vector<std::shared_ptr<SceneObject>> objects;
     std::vector<std::shared_ptr<Light>> lights;
+    std::vector<std::shared_ptr<Light>> path_lights;
     Color background_color = Color(0.0f);
     Color ambient = Color(0.0f);
 };

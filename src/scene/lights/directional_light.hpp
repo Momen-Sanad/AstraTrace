@@ -9,6 +9,7 @@ public:
         : direction(glm::normalize(direction)), color(color) {}
 
     LightEvaluation evaluate(glm::vec3 point) const override;
+    float power() const override { return glm::max(color.r, glm::max(color.g, color.b)); }
 
     void setDirection(const glm::vec3& value) { direction = glm::normalize(value); }
     void setColor(const Color& value) { color = value; }

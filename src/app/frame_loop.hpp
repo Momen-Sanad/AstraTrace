@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <utility>
+#include <cstdint>
 #include <vector>
 #include <SDL3/SDL.h>
 #include "app/input/camera_controller.hpp"
@@ -55,6 +56,10 @@ private:
     render::RenderBackend active_backend = render::RenderBackend::CpuWhitted;
     render::RenderBackend selected_backend = render::RenderBackend::CpuWhitted;
     std::unique_ptr<render::IRenderer> renderer;
+    render::PathRenderSettings path_settings;
+    render::PathRenderSettings previous_path_settings;
+    uint64_t render_frame_index = 0;
+    bool scene_changed_for_render = true;
 
     std::string active_scene_path;
     std::vector<std::string> scene_paths;

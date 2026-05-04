@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 
+#include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -126,6 +127,18 @@ render::RenderBackend backendFromIndex(int index) {
     }
 }
 
+bool cameraStateChanged(const Camera& before, const Camera& after) {
+    constexpr float POSITION_EPSILON = 1e-5f;
+    constexpr float HALF_SIZE_EPSILON = 1e-6f;
+    constexpr float ROTATION_DOT_EPSILON = 1e-6f;
+
+    if(glm::length(before.getPosition() - after.getPosition()) > POSITION_EPSILON) return true;
+    if(glm::length(before.getHalfSize() - after.getHalfSize()) > HALF_SIZE_EPSILON) return true;
+
+    float rotation_dot = glm::abs(glm::dot(before.getRotation(), after.getRotation()));
+    return (1.0f - rotation_dot) > ROTATION_DOT_EPSILON;
+}
+
 } // namespace
 
 void FrameLoop::refreshSceneList() {
@@ -212,6 +225,8 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
 
     active_scene_path = normalizePathString(scene_path);
     status_message = "Loaded: " + active_scene_path;
+    scene_changed_for_render = true;
+    if(renderer) renderer->reset();
 
     scene.printStats();
     SDL_Log(
@@ -243,8 +258,10 @@ bool FrameLoop::switchBackend(render::RenderBackend backend) {
     }
 
     renderer = std::move(new_renderer);
+    renderer->reset();
     active_backend = backend;
     selected_backend = backend;
+    scene_changed_for_render = true;
     status_message = std::string("Backend switched to: ") + backendToLabel(active_backend);
     SDL_Log("Renderer backend switched to: %s", backendToLabel(active_backend));
     return true;
@@ -307,10 +324,24 @@ int FrameLoop::run() {
         float delta_time = static_cast<float>((current_frame_time - last_frame_time) / static_cast<double>(SDL_NS_PER_SECOND));
         last_frame_time = current_frame_time;
 
+        Camera camera_before_update = camera;
         controller.update(delta_time);
+        bool camera_changed = cameraStateChanged(camera_before_update, camera);
         scene.update();
         if(renderer) {
-            renderer->render(scene, camera, buffer);
+            render::PathRenderSettings settings_for_render = path_settings;
+            render::RenderFrameContext frame_context{
+                .frame_index = render_frame_index++,
+                .delta_time = delta_time,
+                .camera_changed = camera_changed,
+                .scene_changed = scene_changed_for_render,
+                .settings_changed = !(settings_for_render == previous_path_settings)
+            };
+            renderer->render(scene, camera, buffer, frame_context, settings_for_render);
+            settings_for_render.reset_requested = false;
+            path_settings.reset_requested = false;
+            previous_path_settings = settings_for_render;
+            scene_changed_for_render = false;
         }
 
         if(!SDL_UpdateTexture(
@@ -375,6 +406,49 @@ int FrameLoop::run() {
         }
 
         ImGui::Text("Active backend: %s", backendToLabel(active_backend));
+        if(active_backend == render::RenderBackend::CpuPath || active_backend == render::RenderBackend::GpuPath) {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Path Tracing");
+
+            const char* sampler_items[] = {"Random", "Halton", "Sobol"};
+            int sampler_index = static_cast<int>(path_settings.sampler);
+            if(ImGui::Combo("Sampler", &sampler_index, sampler_items, IM_ARRAYSIZE(sampler_items))) {
+                path_settings.sampler = static_cast<render::PathSamplerMode>(sampler_index);
+            }
+
+            const char* denoiser_items[] = {"NoOp", "Temporal", "SVGF"};
+            int denoiser_index = static_cast<int>(path_settings.denoiser);
+            if(ImGui::Combo("Denoiser", &denoiser_index, denoiser_items, IM_ARRAYSIZE(denoiser_items))) {
+                path_settings.denoiser = static_cast<render::PathDenoiserMode>(denoiser_index);
+            }
+
+            const char* light_sampler_items[] = {"Uniform", "Power", "Partial BRDF", "Light Tree"};
+            int light_sampler_index = static_cast<int>(path_settings.light_sampler);
+            if(ImGui::Combo(
+                "Light Sampler",
+                &light_sampler_index,
+                light_sampler_items,
+                IM_ARRAYSIZE(light_sampler_items)
+            )) {
+                path_settings.light_sampler = static_cast<render::PathLightSamplerMode>(light_sampler_index);
+            }
+
+            ImGui::SliderInt("Max Bounces", &path_settings.max_bounces, 1, 16);
+            ImGui::SliderInt("Samples / Frame", &path_settings.samples_per_frame, 1, 16);
+            ImGui::Checkbox("Next Event Estimation", &path_settings.enable_nee);
+            ImGui::Checkbox("Multiple Importance Sampling", &path_settings.enable_mis);
+            ImGui::Checkbox("Russian Roulette", &path_settings.enable_russian_roulette);
+            ImGui::Checkbox("Path Regularization", &path_settings.enable_path_regularization);
+            ImGui::Checkbox("TAA Jitter", &path_settings.enable_taa);
+            if(ImGui::Button("Reset Path History")) {
+                path_settings.reset_requested = true;
+            }
+
+            if(renderer) {
+                std::string render_status = renderer->getStatus();
+                if(!render_status.empty()) ImGui::TextUnformatted(render_status.c_str());
+            }
+        }
 
         ImGui::Separator();
         ImGui::Text("Current: %s", active_scene_path.c_str());

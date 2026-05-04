@@ -160,6 +160,27 @@ target_link_libraries(astratrace_app PRIVATE
     glm
 )
 
+add_executable(astratrace_path_phase2_sanity EXCLUDE_FROM_ALL
+    tools/path_phase2_sanity.cpp
+)
+target_include_directories(astratrace_path_phase2_sanity PRIVATE
+    ${ASTRATRACE_PUBLIC_INCLUDES}
+)
+target_link_libraries(astratrace_path_phase2_sanity PRIVATE
+    astratrace_io_gltf
+    astratrace_render_cpu
+    astratrace_scene
+    astratrace_core
+    glm
+)
+
+add_custom_target(check_path_phase2_sanity
+    COMMAND $<TARGET_FILE:astratrace_path_phase2_sanity>
+    DEPENDS astratrace_path_phase2_sanity
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Running Phase 2 path tracing sanity checks"
+)
+
 if(Python3_Interpreter_FOUND)
     add_custom_target(check_include_boundaries
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_include_boundaries.py

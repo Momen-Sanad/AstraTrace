@@ -1,6 +1,8 @@
 # Build output
 /build/
 /cmake-build-*/
+build_phase2/
+build_phase2_mingw/
 
 # CMake generated files
 /CMakeCache.txt
@@ -12,6 +14,7 @@
 /Makefile
 
 /screenshots/
+/references/
 
 # Local tooling/deps
 /.pydeps/

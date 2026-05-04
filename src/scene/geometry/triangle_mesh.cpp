@@ -51,12 +51,16 @@ TriangleMesh::TriangleMesh(const std::span<Triangle>& triangles)
     bounds.max = glm::vec3(std::numeric_limits<float>::lowest());
 
     triangle_refs.resize(this->triangles.size());
+    triangle_area_cdf.reserve(this->triangles.size());
     for(std::size_t i = 0; i < this->triangles.size(); ++i) {
         AABB triangle_bounds = this->triangles[i].getBounds();
         triangle_refs[i].triangle_index = static_cast<uint32_t>(i);
         triangle_refs[i].bounds = triangle_bounds;
         triangle_refs[i].centroid = 0.5f * (triangle_bounds.min + triangle_bounds.max);
         expandBounds(bounds, triangle_bounds);
+
+        total_area += this->triangles[i].surfaceArea();
+        triangle_area_cdf.push_back(total_area);
     }
 
     nodes.reserve(triangle_refs.size() * 2);
@@ -168,3 +172,39 @@ SurfaceData TriangleMesh::getSurfaceData(const Ray& ray, const RayHit& hit) cons
     return triangles[hit.surface_id].getSurfaceData(ray, hit);
 }
 
+glm::vec3 TriangleMesh::geometricNormal(const Ray& ray, const RayHit& hit) const {
+    if(hit.surface_id >= triangles.size()) return glm::vec3(0.0f, 1.0f, 0.0f);
+    return triangles[hit.surface_id].geometricNormal(ray, hit);
+}
+
+void TriangleMesh::samplePoint(
+    const glm::vec3& u,
+    glm::vec3& position,
+    glm::vec3& normal,
+    glm::vec2& uv,
+    float& pdf
+) const {
+    if(triangles.empty() || total_area <= 0.0f) {
+        position = glm::vec3(0.0f);
+        normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        uv = glm::vec2(0.0f);
+        pdf = 0.0f;
+        return;
+    }
+
+    float target = glm::clamp(u.z, 0.0f, 0.99999994f) * total_area;
+    auto it = std::lower_bound(triangle_area_cdf.begin(), triangle_area_cdf.end(), target);
+    std::size_t triangle_index = static_cast<std::size_t>(std::distance(triangle_area_cdf.begin(), it));
+    if(triangle_index >= triangles.size()) triangle_index = triangles.size() - 1;
+
+    triangles[triangle_index].samplePoint(u, position, normal, uv, pdf);
+    pdf = total_area > 0.0f ? 1.0f / total_area : 0.0f;
+}
+
+float TriangleMesh::computePDF(const Ray& ray, const RayHit& hit) const {
+    if(hit.surface_id >= triangles.size() || total_area <= 0.0f) return 0.0f;
+    glm::vec3 normal = triangles[hit.surface_id].geometricNormal(ray, hit);
+    float cos_light = glm::abs(glm::dot(normal, -ray.direction));
+    if(cos_light <= 1e-5f) return 0.0f;
+    return (hit.distance * hit.distance) / (total_area * cos_light);
+}

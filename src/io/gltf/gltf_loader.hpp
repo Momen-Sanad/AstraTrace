@@ -12,6 +12,7 @@ struct GltfSceneLoadResult {
     std::string error;
     std::size_t object_count = 0;
     std::size_t light_count = 0;
+    std::size_t emissive_object_count = 0;
 };
 
 namespace io::gltf {

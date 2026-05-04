@@ -38,6 +38,10 @@ namespace {
 
 constexpr float EPSILON = 1e-8f;
 
+float maxChannel(const Color& color) {
+    return glm::max(color.r, glm::max(color.g, color.b));
+}
+
 void appendLine(std::string& text, const std::string& line) {
     if(line.empty()) return;
     if(!text.empty()) text += "\n";
@@ -99,6 +103,12 @@ glm::mat4 getNodeLocalMatrix(const tinygltf::Node& node) {
     return glm::translate(glm::mat4(1.0f), translation)
          * glm::mat4_cast(rotation)
          * glm::scale(glm::mat4(1.0f), scale);
+}
+
+glm::vec3 transformDirection(const glm::mat4& world_transform, const glm::vec3& local_direction) {
+    glm::vec3 direction = glm::vec3(world_transform * glm::vec4(local_direction, 0.0f));
+    if(glm::dot(direction, direction) <= EPSILON) return glm::normalize(local_direction);
+    return glm::normalize(direction);
 }
 
 void collectNodeWorldTransforms(
@@ -972,8 +982,11 @@ std::shared_ptr<Light> createLightFromNode(
     }
     color *= static_cast<float>(gltf_light.intensity);
 
+    // KHR_lights_punctual lights emit along the node's local -Z axis. The Light
+    // classes store that travel direction; evaluation returns the opposite
+    // vector because shading uses the direction from the shaded point to light.
     if(gltf_light.type == "directional") {
-        glm::vec3 direction = glm::normalize(glm::vec3(world_transform * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+        glm::vec3 direction = transformDirection(world_transform, glm::vec3(0.0f, 0.0f, -1.0f));
         return std::make_shared<DirectionLight>(direction, color);
     }
 
@@ -984,7 +997,7 @@ std::shared_ptr<Light> createLightFromNode(
 
     if(gltf_light.type == "spot") {
         glm::vec3 position = glm::vec3(world_transform * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-        glm::vec3 direction = glm::normalize(glm::vec3(world_transform * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+        glm::vec3 direction = transformDirection(world_transform, glm::vec3(0.0f, 0.0f, -1.0f));
         return std::make_shared<SpotLight>(
             position,
             direction,
@@ -1080,6 +1093,13 @@ GltfSceneLoadResult io::gltf::loadSceneFromGLTF(
 
                 scene.createObject(shape, material);
                 result.object_count++;
+                if(
+                    material &&
+                    maxChannel(material->getAverageEmissivePower()) > 0.0f &&
+                    shape->surfaceArea() > 0.0f
+                ) {
+                    result.emissive_object_count++;
+                }
             }
         }
 
@@ -1089,7 +1109,7 @@ GltfSceneLoadResult io::gltf::loadSceneFromGLTF(
         }
     }
 
-    if(result.light_count == 0) {
+    if(result.light_count == 0 && result.emissive_object_count == 0) {
         // Many sample glTF scenes ship without punctual lights and assume IBL.
         // Always use full-quality fallback key + fill lighting.
         scene.addLight(std::make_shared<DirectionLight>(
@@ -1107,6 +1127,13 @@ GltfSceneLoadResult io::gltf::loadSceneFromGLTF(
         );
         scene.setAmbient(Color(0.16f));
         scene.setBackgroundColor(Color(0.07f));
+    } else if(result.light_count == 0) {
+        appendLine(
+            result.warning,
+            "No glTF punctual lights found. Using emissive geometry as physical area lights."
+        );
+        scene.setAmbient(Color(0.0f));
+        scene.setBackgroundColor(Color(0.0f));
     } else {
         scene.setAmbient(Color(0.02f));
         scene.setBackgroundColor(Color(0.03f));

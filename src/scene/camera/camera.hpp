@@ -28,6 +28,7 @@ public:
     inline glm::vec3 getForward() const { return rotation * glm::vec3(0.0f, 0.0f, -1.0f); }
     inline glm::vec3 getUp() const { return rotation * glm::vec3(0.0f, 1.0f, 0.0f); }
     inline glm::vec3 getRight() const { return rotation * glm::vec3(1.0f, 0.0f, 0.0f); }
+    inline glm::quat getRotation() const { return rotation; }
     inline glm::vec2 getHalfSize() const { return half_size; }
     inline float getFovX() const { return 2.0f * glm::atan(half_size.x); }
     inline float getFovY() const { return 2.0f * glm::atan(half_size.y); }
@@ -56,6 +57,15 @@ public:
         // Then we rotate the direction to get its value in world space.
         glm::vec3 direction = glm::normalize(rotation * view_pos);
         return { position, direction };
+    }
+
+    inline bool projectWorldToUV(glm::vec3 world_position, glm::vec2& uv, float& depth) const {
+        glm::vec3 view = glm::inverse(rotation) * (world_position - position);
+        depth = -view.z;
+        if(depth <= 0.0f) return false;
+        glm::vec2 ndc = glm::vec2(view.x / (depth * half_size.x), view.y / (depth * half_size.y));
+        uv = glm::vec2(0.5f * (ndc.x + 1.0f), 0.5f * (1.0f - ndc.y));
+        return uv.x >= 0.0f && uv.x <= 1.0f && uv.y >= 0.0f && uv.y <= 1.0f;
     }
 
 private:

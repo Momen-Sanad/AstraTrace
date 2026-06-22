@@ -36,8 +36,16 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
 
             Color outgoing_radiance = Color(0.0f);
             if(alpha > 0.0f) {
-                outgoing_radiance = scene.getAmbient() * albedo * occlusion + pbr->sampleEmissive(surface.uv);
-                for(const auto& light : scene.getLights()) {
+                Color ambient_diffuse = scene.getAmbient() * albedo * occlusion;
+                Color ambient_specular = scene.getAmbient()
+                    * F0
+                    * glm::mix(0.08f, 0.42f, metalness)
+                    * (1.0f - 0.45f * glm::clamp(roughness, 0.0f, 1.0f));
+                outgoing_radiance = ambient_diffuse + ambient_specular + pbr->sampleEmissive(surface.uv);
+                const auto& preview_lights = scene.getPathLights().empty()
+                    ? scene.getLights()
+                    : scene.getPathLights();
+                for(const auto& light : preview_lights) {
                     LightEvaluation eval = light->evaluate(position);
                     Color light_contribution = eval.radiance * computeLambertDiffuseAndGGXSpecular(
                         albedo, F0, normal, eval.light_vector, view, roughness
@@ -66,6 +74,7 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
         if(auto glass = std::dynamic_pointer_cast<SmoothGlassMaterial>(material)) {
             glm::vec3 normal = computeGlobalNormal(surface, glass->sampleNormal(surface.uv));
             Color color = glass->sampleBaseColor(surface.uv);
+            float surface_detail = glm::clamp(glass->surface_detail_strength, 0.0f, 1.0f);
             float eta =
                 surface.hit_direction == HitDirection::ENTERING ? 1.0f / glass->refractive_index :
                 surface.hit_direction == HitDirection::EXITING ? glass->refractive_index :
@@ -90,7 +99,33 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
             if(depth <= 0) return (color * (1.0f - F) + F) * scene.getBackgroundColor();
             Color reflection_result = traceRecursive(scene, {position + ray_epsilon * reflected, reflected}, depth - 1);
             Color refraction_result = traceRecursive(scene, {position + ray_epsilon * refracted, refracted}, depth - 1);
-            return F * reflection_result + color * (1.0f - F) * refraction_result;
+            float clear_weight = surface_detail > 0.0f
+                ? glm::clamp(1.0f - 0.70f * surface_detail, 0.25f, 1.0f)
+                : 1.0f;
+            Color glass_result = clear_weight * (F * reflection_result + color * (1.0f - F) * refraction_result);
+            if(surface_detail <= 0.0f) return glass_result;
+
+            Color surface_preview = scene.getAmbient() * color * surface_detail;
+            const auto& preview_lights = scene.getPathLights().empty()
+                ? scene.getLights()
+                : scene.getPathLights();
+            for(const auto& light : preview_lights) {
+                LightEvaluation eval = light->evaluate(position);
+                float n_dot_l = glm::max(0.0f, glm::dot(normal, eval.light_vector));
+                if(n_dot_l <= 0.0f) continue;
+
+                Color light_contribution = eval.radiance * color * (surface_detail * n_dot_l);
+                if(glm::dot(light_contribution, Color(1.0f)) > (1.0f / 255.0f)) {
+                    Color shadow = render::common::computeShadow(
+                        scene,
+                        {position + ray_epsilon * eval.light_vector, eval.light_vector},
+                        eval.distance - ray_epsilon
+                    );
+                    surface_preview += light_contribution * shadow;
+                }
+            }
+
+            return surface_preview + glass_result;
         }
 
         if(auto mirror = std::dynamic_pointer_cast<SmoothMirrorMaterial>(material)) {

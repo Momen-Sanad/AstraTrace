@@ -66,4 +66,8 @@ public:
     virtual Color getAverageEmissivePower() const {
         return Color(0.0f);
     }
+
+    virtual bool castsShadows() const {
+        return true;
+    }
 };

@@ -11,6 +11,7 @@ imports camera (perspective only) and punctual lights (directional/point/spot)
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -46,6 +47,12 @@ void appendLine(std::string& text, const std::string& line) {
     if(line.empty()) return;
     if(!text.empty()) text += "\n";
     text += line;
+}
+
+void appendUniqueLine(std::string& text, const std::string& line) {
+    if(line.empty()) return;
+    if(text.find(line) != std::string::npos) return;
+    appendLine(text, line);
 }
 
 std::string toLower(std::string value) {
@@ -444,6 +451,70 @@ std::shared_ptr<Image<ColorA>> buildBaseColorImage(
     return out;
 }
 
+bool materialNameLooksLikeGuide(const std::string& name) {
+    std::string lower = toLower(name);
+    return lower.find("guide") != std::string::npos ||
+           lower.find("label") != std::string::npos ||
+           lower.find("annotation") != std::string::npos;
+}
+
+bool looksLikeDarkTransparentAnnotationTexture(const tinygltf::Image& image) {
+    if(image.component < 4 || image.width <= 0 || image.height <= 0) return false;
+
+    const int step = glm::max(1, glm::min(image.width, image.height) / 256);
+    int samples = 0;
+    int visible = 0;
+    int dark_visible = 0;
+
+    for(int y = 0; y < image.height; y += step) {
+        for(int x = 0; x < image.width; x += step) {
+            samples++;
+            float alpha = readImageChannel(image, x, y, 3);
+            if(alpha <= 0.05f) continue;
+
+            visible++;
+            float r = readImageChannel(image, x, y, 0);
+            float g = readImageChannel(image, x, y, image.component > 1 ? 1 : 0);
+            float b = readImageChannel(image, x, y, image.component > 2 ? 2 : 0);
+            float luminance = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            if(luminance < 0.18f) dark_visible++;
+        }
+    }
+
+    if(samples == 0 || visible == 0) return false;
+    const float visible_ratio = static_cast<float>(visible) / static_cast<float>(samples);
+    const float dark_ratio = static_cast<float>(dark_visible) / static_cast<float>(visible);
+    return visible_ratio < 0.35f && dark_ratio > 0.85f;
+}
+
+std::shared_ptr<Image<ColorA>> buildReadableGuideImage(
+    const tinygltf::Image& image,
+    const std::string& alpha_mode,
+    float alpha_cutoff
+) {
+    auto out = buildBaseColorImage(image, false, alpha_mode, alpha_cutoff);
+    ColorA* pixels = out->getPixels();
+    const int count = out->getWidth() * out->getHeight();
+    for(int i = 0; i < count; ++i) {
+        pixels[i].r = 0.84f;
+        pixels[i].g = 0.88f;
+        pixels[i].b = 0.90f;
+    }
+    return out;
+}
+
+std::shared_ptr<Image<Color>> buildGuideEmissionImage(const tinygltf::Image& image) {
+    auto out = std::make_shared<Image<Color>>(image.width, image.height);
+    Color* pixels = out->getPixels();
+    for(int y = 0; y < image.height; ++y) {
+        for(int x = 0; x < image.width; ++x) {
+            float alpha = image.component > 3 ? readImageChannel(image, x, y, 3) : 1.0f;
+            pixels[y * image.width + x] = alpha * Color(0.84f, 0.88f, 0.90f);
+        }
+    }
+    return out;
+}
+
 std::shared_ptr<Image<Color>> buildColorImage(const tinygltf::Image& image, bool linearize) {
     auto out = std::make_shared<Image<Color>>(image.width, image.height);
     Color* pixels = out->getPixels();
@@ -521,6 +592,24 @@ std::shared_ptr<Image<Color>> buildMetalRoughnessImage(
     return out;
 }
 
+std::shared_ptr<Image<Color>> buildTransmissionDetailImage(const tinygltf::Image& image) {
+    auto out = std::make_shared<Image<Color>>(image.width, image.height);
+    Color* pixels = out->getPixels();
+    for(int y = 0; y < image.height; ++y) {
+        for(int x = 0; x < image.width; ++x) {
+            float occlusion = readImageChannel(image, x, y, 0);
+            float roughness = readImageChannel(image, x, y, image.component > 1 ? 1 : 0);
+            float metallic = readImageChannel(image, x, y, image.component > 2 ? 2 : 0);
+
+            float detail = occlusion * (0.35f + 0.65f * roughness) - 0.10f * metallic;
+            float grain = 0.50f + 1.75f * (detail - 0.55f);
+            grain = glm::clamp(grain, 0.08f, 0.92f);
+            pixels[y * image.width + x] = Color(grain);
+        }
+    }
+    return out;
+}
+
 std::shared_ptr<Image<Color>> makeSolidColorImage(const Color& color) {
     auto out = std::make_shared<Image<Color>>(1, 1);
     out->getPixels()[0] = color;
@@ -538,13 +627,166 @@ float getEmissiveStrength(const tinygltf::Material& material) {
     return static_cast<float>(value.GetNumberAsDouble());
 }
 
+bool hasAuthoredEmission(const tinygltf::Material& material) {
+    if(material.emissiveTexture.index >= 0) return true;
+    for(double channel : material.emissiveFactor) {
+        if(channel > EPSILON) return true;
+    }
+    return false;
+}
+
+const tinygltf::Value* findExtension(const tinygltf::Material& material, const char* name) {
+    auto ext_it = material.extensions.find(name);
+    if(ext_it == material.extensions.end()) return nullptr;
+    if(!ext_it->second.IsObject()) return nullptr;
+    return &ext_it->second;
+}
+
+float getExtensionNumber(
+    const tinygltf::Material& material,
+    const char* extension_name,
+    const char* property_name,
+    float fallback
+) {
+    const tinygltf::Value* ext = findExtension(material, extension_name);
+    if(!ext || !ext->Has(property_name)) return fallback;
+    const tinygltf::Value& value = ext->Get(property_name);
+    if(!value.IsNumber()) return fallback;
+    return static_cast<float>(value.GetNumberAsDouble());
+}
+
+Color getExtensionColor3(
+    const tinygltf::Material& material,
+    const char* extension_name,
+    const char* property_name,
+    Color fallback
+) {
+    const tinygltf::Value* ext = findExtension(material, extension_name);
+    if(!ext || !ext->Has(property_name)) return fallback;
+    const tinygltf::Value& value = ext->Get(property_name);
+    if(!value.IsArray() || value.ArrayLen() < 3) return fallback;
+
+    Color out = fallback;
+    for(int i = 0; i < 3; ++i) {
+        const tinygltf::Value& channel = value.Get(static_cast<size_t>(i));
+        if(!channel.IsNumber()) return fallback;
+        out[i] = static_cast<float>(channel.GetNumberAsDouble());
+    }
+    return out;
+}
+
+Color computeIridescencePreviewTint(const tinygltf::Material& material) {
+    constexpr float two_pi = 6.28318530718f;
+    const float ior = getExtensionNumber(material, "KHR_materials_iridescence", "iridescenceIor", 1.3f);
+    const float thickness = getExtensionNumber(
+        material,
+        "KHR_materials_iridescence",
+        "iridescenceThicknessMaximum",
+        300.0f
+    );
+
+    const float phase = glm::fract(0.11f + 0.17f * ior + 0.0017f * thickness);
+    const Color wave(
+        0.5f + 0.5f * std::cos(two_pi * (phase + 0.00f)),
+        0.5f + 0.5f * std::cos(two_pi * (phase + 0.33f)),
+        0.5f + 0.5f * std::cos(two_pi * (phase + 0.67f))
+    );
+
+    return Color(
+        0.18f + 0.68f * wave.r,
+        0.18f + 0.68f * wave.g,
+        0.18f + 0.68f * wave.b
+    );
+}
+
 std::shared_ptr<Material> createMaterialFromGLTF(
     const tinygltf::Model& model,
-    const tinygltf::Material& material
+    const tinygltf::Material& material,
+    std::string& warnings
 ) {
+    const tinygltf::PbrMetallicRoughness& mr = material.pbrMetallicRoughness;
+    const float metallic_factor = static_cast<float>(mr.metallicFactor);
+    const float roughness_factor = static_cast<float>(mr.roughnessFactor);
+    const tinygltf::Value* iridescence_ext = findExtension(material, "KHR_materials_iridescence");
+    const tinygltf::Value* transmission_ext = findExtension(material, "KHR_materials_transmission");
+    const float transmission_factor = transmission_ext
+        ? getExtensionNumber(material, "KHR_materials_transmission", "transmissionFactor", 0.0f)
+        : 0.0f;
+    const bool has_transmission_texture =
+        transmission_ext &&
+        transmission_ext->Has("transmissionTexture") &&
+        transmission_ext->Get("transmissionTexture").IsObject();
+    const tinygltf::Value* volume_ext = findExtension(material, "KHR_materials_volume");
+    const tinygltf::Image* mr_img = getTextureImage(model, mr.metallicRoughnessTexture.index);
+    const bool has_metal_roughness_texture = mr_img != nullptr;
+
+    const bool can_import_as_smooth_glass =
+        transmission_factor >= 0.95f &&
+        roughness_factor <= 0.05f &&
+        metallic_factor <= 0.05f &&
+        !has_metal_roughness_texture &&
+        !has_transmission_texture;
+    const bool can_import_as_transmission_glass_preview =
+        transmission_factor >= 0.95f &&
+        (has_metal_roughness_texture || metallic_factor <= 0.05f) &&
+        !has_transmission_texture;
+
+    if(
+        transmission_ext &&
+        transmission_factor > 0.0f &&
+        !can_import_as_transmission_glass_preview
+    ) {
+        appendUniqueLine(
+            warnings,
+            "KHR_materials_transmission material kept as PBR because transmission textures or metallic transmission are not implemented."
+        );
+    }
+
+    if(can_import_as_transmission_glass_preview) {
+        auto glass = std::make_shared<SmoothGlassMaterial>();
+        Color tint(
+            static_cast<float>(mr.baseColorFactor.size() > 0 ? mr.baseColorFactor[0] : 1.0),
+            static_cast<float>(mr.baseColorFactor.size() > 1 ? mr.baseColorFactor[1] : 1.0),
+            static_cast<float>(mr.baseColorFactor.size() > 2 ? mr.baseColorFactor[2] : 1.0)
+        );
+        if(volume_ext) {
+            tint *= getExtensionColor3(
+                material,
+                "KHR_materials_volume",
+                "attenuationColor",
+                Color(1.0f)
+            );
+            appendUniqueLine(
+                warnings,
+                "KHR_materials_volume approximated as smooth glass attenuation tint; volume scattering is not implemented."
+            );
+        }
+        if(!can_import_as_smooth_glass) {
+            appendUniqueLine(
+                warnings,
+                "KHR_materials_transmission rough/textured material approximated as smooth textured glass preview; rough transmission scattering is not implemented."
+            );
+            glass->surface_detail_strength = glm::clamp(0.45f + 0.45f * roughness_factor, 0.45f, 0.90f);
+        }
+        glass->tint = tint;
+        glass->refractive_index = glm::max(
+            1.0f,
+            getExtensionNumber(material, "KHR_materials_ior", "ior", 1.5f)
+        );
+
+        if(const tinygltf::Image* base_color_img = getTextureImage(model, mr.baseColorTexture.index)) {
+            glass->base_color = buildColorImage(*base_color_img, true);
+        } else if(mr_img) {
+            glass->base_color = buildTransmissionDetailImage(*mr_img);
+        }
+        if(const tinygltf::Image* normal_img = getTextureImage(model, material.normalTexture.index)) {
+            glass->normal = buildNormalImage(*normal_img, static_cast<float>(material.normalTexture.scale));
+        }
+        return glass;
+    }
+
     auto pbr = std::make_shared<PBRMaterial>();
 
-    const tinygltf::PbrMetallicRoughness& mr = material.pbrMetallicRoughness;
     pbr->tint = ColorA(
         static_cast<float>(mr.baseColorFactor.size() > 0 ? mr.baseColorFactor[0] : 1.0),
         static_cast<float>(mr.baseColorFactor.size() > 1 ? mr.baseColorFactor[1] : 1.0),
@@ -552,13 +794,30 @@ std::shared_ptr<Material> createMaterialFromGLTF(
         static_cast<float>(mr.baseColorFactor.size() > 3 ? mr.baseColorFactor[3] : 1.0)
     );
 
+    const tinygltf::Image* readable_guide_img = nullptr;
     if(const tinygltf::Image* base_color_img = getTextureImage(model, mr.baseColorTexture.index)) {
-        pbr->base_color = buildBaseColorImage(
-            *base_color_img,
-            true,
-            material.alphaMode,
-            static_cast<float>(material.alphaCutoff)
-        );
+        const bool readable_guide =
+            materialNameLooksLikeGuide(material.name) &&
+            looksLikeDarkTransparentAnnotationTexture(*base_color_img);
+        pbr->base_color = readable_guide
+            ? buildReadableGuideImage(
+                *base_color_img,
+                material.alphaMode,
+                static_cast<float>(material.alphaCutoff)
+            )
+            : buildBaseColorImage(
+                *base_color_img,
+                true,
+                material.alphaMode,
+                static_cast<float>(material.alphaCutoff)
+            );
+        if(readable_guide) {
+            readable_guide_img = base_color_img;
+            appendUniqueLine(
+                warnings,
+                "Dark transparent guide/label texture remapped to light annotations for dark preview backgrounds."
+            );
+        }
     } else if(material.alphaMode == "OPAQUE") {
         pbr->tint.a = 1.0f;
     } else if(material.alphaMode == "MASK") {
@@ -582,10 +841,14 @@ std::shared_ptr<Material> createMaterialFromGLTF(
     if(const tinygltf::Image* emissive_img = getTextureImage(model, material.emissiveTexture.index)) {
         pbr->emissive = buildColorImage(*emissive_img, true);
     }
+    if(readable_guide_img) {
+        pbr->emissive = buildGuideEmissionImage(*readable_guide_img);
+        pbr->emissive_power = Color(1.8f);
+        pbr->contributes_emission_to_lighting = false;
+        pbr->casts_shadows = false;
+    }
 
-    float metallic_factor = static_cast<float>(mr.metallicFactor);
-    float roughness_factor = static_cast<float>(mr.roughnessFactor);
-    if(const tinygltf::Image* mr_img = getTextureImage(model, mr.metallicRoughnessTexture.index)) {
+    if(mr_img) {
         pbr->metal_roughness = buildMetalRoughnessImage(*mr_img, metallic_factor, roughness_factor);
     } else if(glm::abs(metallic_factor) > EPSILON || glm::abs(roughness_factor - 1.0f) > EPSILON) {
         pbr->metal_roughness = makeSolidColorImage(Color(
@@ -593,6 +856,28 @@ std::shared_ptr<Material> createMaterialFromGLTF(
             glm::clamp(roughness_factor, 0.0f, 1.0f),
             0.0f
         ));
+    }
+
+    if(iridescence_ext) {
+        appendUniqueLine(
+            warnings,
+            "KHR_materials_iridescence is approximated as softened tinted PBR; true thin-film interference is not implemented."
+        );
+
+        if(!pbr->base_color) {
+            const Color base_rgb(pbr->tint);
+            const Color preview_tint = computeIridescencePreviewTint(material);
+            const Color adjusted = maxChannel(base_rgb) < 0.08f
+                ? 0.80f * preview_tint
+                : glm::mix(base_rgb, preview_tint, 0.28f);
+            pbr->tint = ColorA(adjusted.r, adjusted.g, adjusted.b, pbr->tint.a);
+        }
+
+        if(!mr_img) {
+            const float preview_metallic = glm::min(glm::clamp(metallic_factor, 0.0f, 1.0f), 0.55f);
+            const float preview_roughness = glm::max(glm::clamp(roughness_factor, 0.0f, 1.0f), 0.58f);
+            pbr->metal_roughness = makeSolidColorImage(Color(preview_metallic, preview_roughness, 0.0f));
+        }
     }
 
     return pbr;
@@ -1043,7 +1328,7 @@ GltfSceneLoadResult io::gltf::loadSceneFromGLTF(
         materials.push_back(createDefaultMaterial());
     } else {
         for(const tinygltf::Material& material : model.materials) {
-            materials.push_back(createMaterialFromGLTF(model, material));
+            materials.push_back(createMaterialFromGLTF(model, material, result.warning));
         }
     }
     std::shared_ptr<Material> default_material = createDefaultMaterial();
@@ -1109,30 +1394,62 @@ GltfSceneLoadResult io::gltf::loadSceneFromGLTF(
         }
     }
 
-    if(result.light_count == 0 && result.emissive_object_count == 0) {
+    bool has_transmissive_material = false;
+    bool has_authored_emissive_material = false;
+    for(const tinygltf::Material& material : model.materials) {
+        if(getExtensionNumber(material, "KHR_materials_transmission", "transmissionFactor", 0.0f) > 0.0f) {
+            has_transmissive_material = true;
+        }
+        if(hasAuthoredEmission(material)) {
+            has_authored_emissive_material = true;
+        }
+    }
+
+    if(result.light_count == 0 && !has_authored_emissive_material) {
         // Many sample glTF scenes ship without punctual lights and assume IBL.
-        // Always use full-quality fallback key + fill lighting.
+        // Use soft preview lighting plus ambient fill instead of a hard HDR-looking key.
+        const float key_strength = has_transmissive_material ? 2.20f : 0.95f;
+        const float fill_strength = has_transmissive_material ? 1.25f : 0.48f;
+        const float ambient_strength = has_transmissive_material ? 0.85f : 0.34f;
+        const float background_strength = has_transmissive_material ? 0.50f : 0.11f;
         scene.addLight(std::make_shared<DirectionLight>(
             glm::normalize(glm::vec3(-0.5f, -1.0f, -0.35f)),
-            Color(2.8f)
+            Color(key_strength)
         ));
         scene.addLight(std::make_shared<DirectionLight>(
             glm::normalize(glm::vec3(0.45f, -0.35f, 0.85f)),
-            Color(0.85f)
+            Color(fill_strength)
         ));
         result.light_count += 2;
         appendLine(
             result.warning,
-            "No glTF lights found. Added fallback key/fill directional lights for visibility."
+            "No glTF lights found. Added soft fallback key/fill lights and ambient fill for visibility."
         );
-        scene.setAmbient(Color(0.16f));
-        scene.setBackgroundColor(Color(0.07f));
+        scene.setAmbient(Color(ambient_strength));
+        scene.setBackgroundColor(Color(background_strength));
     } else if(result.light_count == 0) {
-        appendLine(
-            result.warning,
-            "No glTF punctual lights found. Using emissive geometry as physical area lights."
-        );
-        scene.setAmbient(Color(0.0f));
+        if(!result.camera_loaded) {
+            scene.addLight(std::make_shared<DirectionLight>(
+                glm::normalize(glm::vec3(-0.35f, -1.0f, -0.45f)),
+                Color(1.9f)
+            ));
+            scene.addLight(std::make_shared<DirectionLight>(
+                glm::normalize(glm::vec3(0.45f, -0.35f, 0.85f)),
+                Color(0.65f)
+            ));
+            result.light_count += 2;
+            appendLine(
+                result.warning,
+                "No glTF punctual lights or camera found. Using emissive geometry plus preview key/fill lights for visibility."
+            );
+            scene.setAmbient(Color(0.24f));
+        } else {
+            appendLine(
+                result.warning,
+                "No glTF punctual lights found. Using emissive geometry as physical area lights."
+            );
+            scene.setAmbient(Color(0.0f));
+        }
         scene.setBackgroundColor(Color(0.0f));
     } else {
         scene.setAmbient(Color(0.02f));

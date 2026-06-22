@@ -13,6 +13,12 @@ Color computeShadow(const Scene& scene, Ray ray, float max_distance) {
             if(hit.distance > max_distance) break;
 
             auto material = object->getMaterial();
+            if(material && !material->castsShadows()) {
+                ray.origin += ray.direction * (hit.distance + ray_epsilon);
+                max_distance -= hit.distance + ray_epsilon;
+                continue;
+            }
+
             if(auto pbr = std::dynamic_pointer_cast<PBRMaterial>(material)) {
                 SurfaceData surface = object->getSurfaceData(ray, hit);
                 ColorA color_alpha = pbr->sampleBaseColor(surface.uv);

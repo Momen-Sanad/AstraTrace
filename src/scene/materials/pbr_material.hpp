@@ -168,6 +168,10 @@ public:
     std::shared_ptr<Image<Color>> metal_roughness = nullptr;
     ColorA tint = ColorA(1.0f);
     Color emissive_power = Color(0.0f);
+    bool contributes_emission_to_lighting = true;
+    bool casts_shadows = true;
+    mutable bool average_emissive_cache_valid = false;
+    mutable Color average_emissive_cache = Color(0.0f);
 
     inline ColorA sampleBaseColor(glm::vec2 uv) const {
         if(base_color) return tint * sampleImage(base_color, uv);
@@ -221,12 +225,24 @@ public:
     }
 
     Color getAverageEmissivePower() const override {
-        if(!emissive) return emissive_power;
+        if(!contributes_emission_to_lighting) return Color(0.0f);
+        if(average_emissive_cache_valid) return average_emissive_cache;
+        if(!emissive) {
+            average_emissive_cache = emissive_power;
+            average_emissive_cache_valid = true;
+            return average_emissive_cache;
+        }
         const Color* pixels = emissive->getPixels();
         Color average(0.0f);
         int count = emissive->getWidth() * emissive->getHeight();
         for(int i = 0; i < count; ++i) average += pixels[i];
         if(count > 0) average /= static_cast<float>(count);
-        return emissive_power * average;
+        average_emissive_cache = emissive_power * average;
+        average_emissive_cache_valid = true;
+        return average_emissive_cache;
+    }
+
+    bool castsShadows() const override {
+        return casts_shadows;
     }
 };

@@ -50,6 +50,7 @@ set(ASTRATRACE_VENDOR_INCLUDES
 
 add_library(astratrace_core STATIC
     src/core/image.cpp
+    src/core/image_io.cpp
 )
 target_include_directories(astratrace_core PUBLIC
     ${ASTRATRACE_PUBLIC_INCLUDES}
@@ -67,6 +68,7 @@ add_library(astratrace_scene STATIC
     src/scene/geometry/obj_loader.cpp
     src/scene/world/scene_object.cpp
     src/scene/world/scene.cpp
+    src/scene/world/scene_showcase.cpp
 )
 target_include_directories(astratrace_scene PUBLIC
     ${ASTRATRACE_PUBLIC_INCLUDES}

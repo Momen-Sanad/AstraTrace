@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 #include <string>
 
 #include <glm/geometric.hpp>
@@ -12,6 +13,7 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include "io/gltf/gltf_loader.hpp"
 #include "platform/sdl/screenshot.hpp"
+#include "scene/world/scene_showcase.hpp"
 
 namespace {
 constexpr const char* WINDOW_TITLE = "AstraTrace";
@@ -37,6 +39,15 @@ std::string normalizePathString(const std::filesystem::path& path) {
 
 std::string normalizePathKey(const std::filesystem::path& path) {
     return toLowerAscii(normalizePathString(path));
+}
+
+bool isBuiltinScenePath(const std::string& path) {
+    return path == MATERIAL_SHOWCASE_SCENE_ID;
+}
+
+std::string scenePathKey(const std::string& path) {
+    if(isBuiltinScenePath(path)) return toLowerAscii(path);
+    return normalizePathKey(std::filesystem::path(path));
 }
 
 bool isScenePath(const std::filesystem::path& path) {
@@ -134,16 +145,44 @@ bool cameraStateChanged(const Camera& before, const Camera& after) {
     return (1.0f - rotation_dot) > ROTATION_DOT_EPSILON;
 }
 
+bool frameCameraToScene(const Scene& scene, Camera& camera, float aspect_ratio) {
+    const auto& objects = scene.getObjects();
+    if(objects.empty()) return false;
+
+    AABB bounds;
+    bounds.min = glm::vec3(std::numeric_limits<float>::max());
+    bounds.max = glm::vec3(std::numeric_limits<float>::lowest());
+    for(const auto& object : objects) {
+        AABB object_bounds = object->getBounds();
+        bounds.min = glm::min(bounds.min, object_bounds.min);
+        bounds.max = glm::max(bounds.max, object_bounds.max);
+    }
+
+    glm::vec3 center = 0.5f * (bounds.min + bounds.max);
+    glm::vec3 extent = bounds.max - bounds.min;
+    float radius = glm::max(0.5f * glm::length(extent), 1.0f);
+    glm::vec3 position = center + glm::vec3(0.0f, 0.25f * radius, 2.4f * radius);
+    glm::vec3 forward = glm::normalize(center - position);
+
+    camera.setPosition(position);
+    camera.setRotation(forward, glm::vec3(0.0f, 1.0f, 0.0f));
+    camera.setHalfSize(glm::radians(50.0f), aspect_ratio);
+    return true;
+}
+
 } // namespace
 
 void FrameLoop::refreshSceneList() {
-    std::filesystem::path active_path(active_scene_path);
-    const std::string active_key = normalizePathKey(active_path);
+    std::filesystem::path active_path = isBuiltinScenePath(active_scene_path)
+        ? std::filesystem::path()
+        : std::filesystem::path(active_scene_path);
+    const std::string active_key = scenePathKey(active_scene_path);
     std::filesystem::path scenes_root = findScenesRoot(active_path);
 
     scene_paths.clear();
     scene_labels.clear();
     selected_scene_index = -1;
+    scene_paths.push_back(MATERIAL_SHOWCASE_SCENE_ID);
 
     if(!scenes_root.empty()) {
         std::error_code ec;
@@ -159,9 +198,9 @@ void FrameLoop::refreshSceneList() {
     std::sort(scene_paths.begin(), scene_paths.end());
     scene_paths.erase(std::unique(scene_paths.begin(), scene_paths.end()), scene_paths.end());
 
-    if(!active_scene_path.empty()) {
+    if(!active_scene_path.empty() && !isBuiltinScenePath(active_scene_path)) {
         auto active_it = std::find_if(scene_paths.begin(), scene_paths.end(), [&](const std::string& path) {
-            return normalizePathKey(path) == active_key;
+            return scenePathKey(path) == active_key;
         });
         if(active_it == scene_paths.end()) {
             scene_paths.push_back(normalizePathString(active_scene_path));
@@ -171,10 +210,21 @@ void FrameLoop::refreshSceneList() {
     if(!scene_paths.empty()) {
         std::sort(scene_paths.begin(), scene_paths.end());
         for(const std::string& scene_path : scene_paths) {
-            std::filesystem::path path(scene_path);
-            std::string label = path.filename().string();
-            if(!scenes_root.empty()) {
+            std::string label;
+            if(isBuiltinScenePath(scene_path)) {
+                label = "Material Showcase";
+            } else {
+                std::filesystem::path path(scene_path);
+                label = path.filename().string();
+                if(!scenes_root.empty()) {
+                    std::error_code ec;
+                    std::filesystem::path relative = std::filesystem::relative(path, scenes_root, ec);
+                    if(!ec && !relative.empty()) label = relative.string();
+                }
+            }
+            if(!isBuiltinScenePath(scene_path) && !scenes_root.empty()) {
                 std::error_code ec;
+                std::filesystem::path path(scene_path);
                 std::filesystem::path relative = std::filesystem::relative(path, scenes_root, ec);
                 if(!ec && !relative.empty()) label = relative.string();
             }
@@ -182,7 +232,7 @@ void FrameLoop::refreshSceneList() {
         }
 
         auto selected_it = std::find_if(scene_paths.begin(), scene_paths.end(), [&](const std::string& path) {
-            return normalizePathKey(path) == active_key;
+            return scenePathKey(path) == active_key;
         });
         if(selected_it != scene_paths.end()) {
             selected_scene_index = static_cast<int>(std::distance(scene_paths.begin(), selected_it));
@@ -197,6 +247,22 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
     Camera loaded_camera;
     const float aspect_ratio = buffer.getWidth() / static_cast<float>(buffer.getHeight());
     loaded_camera.setHalfSize(glm::radians(90.0f), aspect_ratio);
+
+    if(isBuiltinScenePath(scene_path)) {
+        buildMaterialShowcaseScene(loaded_scene, loaded_camera, aspect_ratio);
+        scene = std::move(loaded_scene);
+        camera = loaded_camera;
+        controller.resetFromCamera();
+
+        active_scene_path = MATERIAL_SHOWCASE_SCENE_ID;
+        status_message = "Loaded: Material Showcase";
+        scene_changed_for_render = true;
+        if(renderer) renderer->reset();
+
+        scene.printStats();
+        refreshSceneList();
+        return true;
+    }
 
     GltfSceneLoadResult load_result = io::gltf::loadSceneFromGLTF(
         scene_path,
@@ -215,6 +281,10 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
     }
 
     scene = std::move(loaded_scene);
+    scene.update();
+    if(!load_result.camera_loaded) {
+        frameCameraToScene(scene, loaded_camera, aspect_ratio);
+    }
     camera = loaded_camera;
     controller.resetFromCamera();
 
@@ -278,9 +348,13 @@ int FrameLoop::run() {
         return -1;
     }
 
-    active_scene_path = normalizePathString(active_scene_path);
+    if(!isBuiltinScenePath(active_scene_path)) {
+        active_scene_path = normalizePathString(active_scene_path);
+    }
     refreshSceneList();
-    status_message = "Loaded: " + active_scene_path;
+    status_message = isBuiltinScenePath(active_scene_path)
+        ? "Loaded: Material Showcase"
+        : "Loaded: " + active_scene_path;
 
     FPSTracker fps_tracker;
     Uint64 last_frame_time = SDL_GetTicksNS();

@@ -2,3 +2,4 @@
 
 #include "scene/world/scene_object.hpp"
 #include "scene/world/scene.hpp"
+#include "scene/world/scene_showcase.hpp"

@@ -16,6 +16,23 @@ build_phase2_mingw/
 /screenshots/
 /references/
 
+# Local planning/UI scratch
+/draft.md
+/imgui.ini
+
+# Optional external glTF Sample Asset drops kept outside portfolio commits
+/scenes/IridescenceMetallicSpheres.bin
+/scenes/IridescenceMetallicSpheres.gltf
+/scenes/LICENSE.md
+/scenes/README.body.md
+/scenes/README.md
+/scenes/metadata.json
+/scenes/glTF/
+/scenes/glTF-Binary/
+/scenes/glTF-Binary-KTX-ETC1S-Draco/
+/scenes/screenshot/
+/scenes/textures/
+
 # Local tooling/deps
 /.pydeps/
 

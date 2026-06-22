@@ -10,7 +10,7 @@ This file documents the role of each source file in the current modular layout.
 - `src/core/*`: core data types and low-level utilities.
 - `src/scene/*`: scene data model and geometry/material/light systems.
 - `src/io/*`: scene loading and import pipeline.
-- `src/render/*`: renderer interfaces and backend implementations.
+- `src/render/*`: renderer interfaces and CPU backend implementations.
 - `tools/*`: dev tooling and architecture checks.
 
 ## Public API Includes (`include/astratrace`)
@@ -26,7 +26,7 @@ This file documents the role of each source file in the current modular layout.
 
 - `src/app/main.cpp`: app entry point; launches `Application`.
 - `src/app/application.hpp`: `Application` interface.
-- `src/app/application.cpp`: program bootstrap (CLI parse, SDL init, scene load, backend select).
+- `src/app/application.cpp`: CLI parse, built-in showcase/export orchestration, SDL init, scene load, backend select.
 - `src/app/frame_loop.hpp`: frame loop interface binding app subsystems.
 - `src/app/frame_loop.cpp`: event/update/render loop + FPS title + screenshot trigger.
 - `src/app/input/camera_controller.hpp`: camera input controller interface.
@@ -44,6 +44,8 @@ This file documents the role of each source file in the current modular layout.
 - `src/core/ray.hpp`: `Ray` and `RayHit` definitions.
 - `src/core/image.hpp`: `Image<T>` container + sampling/loading declarations.
 - `src/core/image.cpp`: stb-based image loading specializations.
+- `src/core/image_io.hpp`: image export declarations.
+- `src/core/image_io.cpp`: stb-based PNG export implementation.
 
 ## Scene Layer (`src/scene`)
 
@@ -55,7 +57,7 @@ This file documents the role of each source file in the current modular layout.
 - `src/scene/geometry/triangle.hpp`: triangle primitive declaration.
 - `src/scene/geometry/triangle.cpp`: triangle intersection/surface interpolation.
 - `src/scene/geometry/triangle_mesh.hpp`: triangle-mesh declaration.
-- `src/scene/geometry/triangle_mesh.cpp`: mesh bounds/intersection traversal.
+- `src/scene/geometry/triangle_mesh.cpp`: mesh bounds/intersection traversal with median-split triangle BVH.
 - `src/scene/geometry/sphere.hpp`: sphere primitive declaration.
 - `src/scene/geometry/sphere.cpp`: sphere intersection/surface mapping.
 - `src/scene/geometry/obj_loader.hpp`: procedural mesh + OBJ loader declarations.
@@ -83,13 +85,15 @@ This file documents the role of each source file in the current modular layout.
 - `src/scene/world/scene_object.hpp`: scene object transform/material/shape binding.
 - `src/scene/world/scene_object.cpp`: object transform updates and broad-phase checks.
 - `src/scene/world/scene.hpp`: scene container API (objects/lights/intersection queries).
-- `src/scene/world/scene.cpp`: scene traversal/stats implementation.
+- `src/scene/world/scene.cpp`: scene traversal/stats implementation with top-level object BVH.
+- `src/scene/world/scene_showcase.hpp`: built-in showcase scene declaration.
+- `src/scene/world/scene_showcase.cpp`: procedural material showcase scene construction.
 - `src/scene/world/world.hpp`: umbrella include for world module.
 
 ## IO Layer (`src/io/gltf`)
 
 - `src/io/gltf/gltf_loader.hpp`: public glTF scene-load API (`io::gltf::loadSceneFromGLTF`).
-- `src/io/gltf/gltf_loader.cpp`: main glTF load pipeline implementation.
+- `src/io/gltf/gltf_loader.cpp`: main glTF load pipeline implementation, including conservative smooth-glass transmission mapping and preview iridescence fallback.
 - `src/io/gltf/gltf_parser.hpp`: glTF parse abstraction declaration.
 - `src/io/gltf/gltf_parser.cpp`: tinygltf file parsing implementation.
 - `src/io/gltf/gltf_scene_builder.hpp`: scene-build abstraction declaration.
@@ -115,16 +119,14 @@ This file documents the role of each source file in the current modular layout.
 - `src/render/cpu/whitted_integrator.hpp`: Whitted integrator declaration.
 - `src/render/cpu/whitted_integrator.cpp`: recursive Whitted tracing implementation.
 - `src/render/cpu/path_integrator.hpp`: CPU path integrator declaration.
-- `src/render/cpu/path_integrator.cpp`: CPU path integrator placeholder/fallback implementation.
+- `src/render/cpu/path_integrator.cpp`: CPU path integrator implementation.
 - `src/render/cpu/cpu_whitted_renderer.hpp`: CPU Whitted renderer declaration.
 - `src/render/cpu/cpu_whitted_renderer.cpp`: image rendering using Whitted integrator.
 - `src/render/cpu/cpu_path_renderer.hpp`: CPU path renderer declaration.
-- `src/render/cpu/cpu_path_renderer.cpp`: image rendering using path integrator.
-
-### GPU Backend
-- `src/render/gpu/gpu_path_renderer.hpp`: GPU path renderer declaration.
-- `src/render/gpu/gpu_path_renderer.cpp`: GPU backend placeholder (currently routes to CPU path renderer).
+- `src/render/cpu/cpu_path_renderer.cpp`: image rendering using the path integrator, temporal accumulation, and simplified SVGF-style denoising.
 
 ## Tooling (`tools`)
 
 - `tools/check_include_boundaries.py`: validates include-direction constraints between modules.
+- `tools/path_phase2_sanity.cpp`: sanity checks for path tracing, glTF import, showcase construction, stats, and PNG export.
+- `tools/bvh_benchmark.cpp`: compares linear object traversal against top-level BVH traversal for deterministic camera rays.

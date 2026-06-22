@@ -1,7 +1,7 @@
 # AstraTrace
 
-AstraTrace is a physically based rendering engine built in C++ for glTF 2.0 scenes.  
-It combines BVH-accelerated software ray tracing, production-style path tracing features, and real-time GPU software ray tracing in one unified project.
+AstraTrace is a C++20 physically based software renderer for glTF 2.0 scenes.
+It combines Whitted-style ray tracing, progressive CPU path tracing, textured PBR materials, and an interactive SDL/ImGui viewer.
 
 ## Core Capabilities
 
@@ -14,9 +14,15 @@ It combines BVH-accelerated software ray tracing, production-style path tracing 
   - Base color, metallic, roughness, emissive, occlusion, normal
   - `KHR_materials_emissive_strength`
   - `KHR_lights_punctual`
+  - Conservative smooth-glass mapping for simple `KHR_materials_transmission` + `KHR_materials_ior`
+  - Softened tinted preview fallback for `KHR_materials_iridescence`
 - Fallback normal/tangent generation for incomplete mesh data
 - First-person camera controls and screenshot capture (`P` key)
-- BVH-accelerated traversal for scalable scene intersection
+- BVH-accelerated traversal:
+  - Top-level object BVH for scene objects
+  - Per-mesh triangle BVH using median splits on the longest centroid axis
+- Built-in material showcase scene for glass, smooth mirror/metal, rough metal, and dielectric PBR
+- Non-interactive PNG export for reproducible portfolio captures
 
 ## Rendering Pipeline
 
@@ -31,13 +37,15 @@ It combines BVH-accelerated software ray tracing, production-style path tracing 
 - Russian Roulette termination
 - Low-discrepancy sampling (LDS)
 - Emissive-material light transport
-- SVGF denoising (spatiotemporal variance guided filtering)
+- Temporal accumulation and simplified SVGF-style denoising with history reprojection
+- Uniform, power-based, and contribution-weighted light selection
 
-### 3) GPU Software Path Tracing
-- GPU execution of the same physically based light transport model
-- Software ray tracing (no hardware RTX dependency)
-- Interactive target throughput (`>=30 FPS` at `1280x720`)
-- CPU preprocessing support (including BVH build)
+## Feature Notes
+
+- `SVGF` in the UI is a compact SVGF-style preview denoiser, not a full paper implementation.
+- `Contribution` light sampling estimates local light contribution per shading point; it is not a persistent light-tree hierarchy.
+- `KHR_materials_iridescence` is approximated as tinted rough PBR for visibility; true thin-film interference is deferred.
+- The project is CPU-only. Build output or third-party dependency logs may mention graphics APIs internally, but AstraTrace does not expose a GPU renderer.
 
 ## Tech Stack
 
@@ -69,13 +77,24 @@ If no scene is provided, the scripts try an automatic default scene.
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ./build/bin/astratrace_app ./scenes/Duck/Duck.gltf --backend cpu-whitted
+./build/bin/astratrace_app --showcase material --backend cpu-path
+./build/bin/astratrace_app --showcase material --backend cpu-path --export screenshots/portfolio/material-showcase.png --width 1280 --height 720 --samples 64 --bounces 5 --denoiser temporal
 cmake --build build --config Release --target check_include_boundaries
+cmake --build build --config Release --target check_path_phase2_sanity
+cmake --build build --config Release --target benchmark_bvh
 ```
 
 Backends:
 - `cpu-whitted` (default)
 - `cpu-path`
-- `gpu-path`
+
+Export options:
+- `--export <out.png>`
+- `--width <pixels>` / `--height <pixels>`
+- `--samples <spp>` and `--bounces <count>` for `cpu-path`
+- `--denoiser temporal|svgf`
+- `--sampler random|halton|sobol`
+- `--light-sampler uniform|power|contribution`
 
 ## Runtime Controls
 
@@ -88,12 +107,22 @@ Backends:
 
 ## Example Scenes
 
+- Built-in: `--showcase material`
 - `scenes/Duck/Duck.gltf`
 - `scenes/Lantern/Lantern.gltf`
 - `scenes/Buggy/Buggy.gltf`
 - `cornell-box-1.glb`
 - `cornell-box-2.glb`
 - `sponza.glb`
+
+## Portfolio Capture Recipe
+
+```powershell
+.\build_phase2_mingw\bin\astratrace_app.exe --showcase material --backend cpu-path --export screenshots\portfolio\material-showcase.png --width 1280 --height 720 --samples 64 --bounces 5 --denoiser temporal
+.\build_phase2_mingw\bin\astratrace_app.exe scenes\cornell-box-1.glb --backend cpu-path --export screenshots\portfolio\cornell.png --width 1280 --height 720 --samples 64 --bounces 5 --denoiser temporal
+.\build_phase2_mingw\bin\astratrace_app.exe scenes\Lantern\Lantern.gltf --backend cpu-whitted --export screenshots\portfolio\lantern.png --width 1280 --height 720
+.\build_phase2_mingw\bin\astratrace_app.exe scenes\sponza.glb --backend cpu-whitted --export screenshots\portfolio\sponza.png --width 1280 --height 720
+```
 
 ## Repository Layout
 
@@ -104,7 +133,7 @@ src/platform/sdl/ SDL-specific screenshot/window helpers
 src/core/   Foundational types (color, ray, image)
 src/scene/  Camera, world, geometry, materials, lights
 src/io/gltf/ glTF loading/parsing/build pipeline
-src/render/ Rendering interfaces and CPU/GPU backends
+src/render/ Rendering interfaces and CPU backends
 scenes/     Sample glTF scenes
 assets/     Runtime assets and textures
 vendor/     Third-party dependencies

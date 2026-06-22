@@ -61,7 +61,7 @@ public:
     bool isDelta() const override { return false; }
 
     void markDirty() { is_dirty = true; }
-    void update();
+    bool update();
 
 private:
     ObjectID id = 0;

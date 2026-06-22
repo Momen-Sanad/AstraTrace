@@ -96,6 +96,7 @@ int TriangleMesh::buildNode(int start, int count) {
     if(extent.y > extent.x && extent.y > extent.z) axis = 1;
     else if(extent.z > extent.x) axis = 2;
 
+    // Median split on the longest centroid axis keeps construction cheap and deterministic.
     const int mid = start + count / 2;
     std::nth_element(
         triangle_refs.begin() + start,

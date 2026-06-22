@@ -1,6 +1,4 @@
 #include "scene/world/scene_object.hpp"
-// median heuristic in low-level bvh
-// bvh top-level too
 
 #include <algorithm>
 #include <limits>
@@ -198,8 +196,8 @@ float SceneObject::estimatePowerAt(glm::vec3 point, glm::vec3 normal) const {
     return power() * glm::max(0.0f, glm::dot(normal, to_light)) / dist2;
 }
 
-void SceneObject::update() {
-    if(!is_dirty) return;
+bool SceneObject::update() {
+    if(!is_dirty) return false;
     is_dirty = false;
 
     is_identity_transform =
@@ -242,4 +240,5 @@ void SceneObject::update() {
     float scale_z = glm::length(glm::vec3(transform[2]));
     float max_scale = glm::max(scale_x, glm::max(scale_y, scale_z));
     bounds_radius = local_radius * max_scale;
+    return true;
 }

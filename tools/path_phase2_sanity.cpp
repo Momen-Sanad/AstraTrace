@@ -10,14 +10,16 @@
 
 #include "core/color.hpp"
 #include "core/image.hpp"
+#include "core/image_io.hpp"
 #include "io/gltf/gltf_loader.hpp"
 #include "render/cpu/alias_table.hpp"
 #include "render/cpu/cpu_path_renderer.hpp"
 #include "render/cpu/sampler.hpp"
 #include "scene/camera/camera.hpp"
 #include "scene/geometry/triangle.hpp"
-#include "scene/materials/pbr_material.hpp"
+#include "scene/materials/materials.hpp"
 #include "scene/world/scene.hpp"
+#include "scene/world/scene_showcase.hpp"
 
 namespace {
 
@@ -128,6 +130,510 @@ void checkRendererHistory() {
     require(!renderer.getStatus().empty(), "renderer status was empty after temporal render");
 }
 
+void checkMaterialShowcase() {
+    Scene scene;
+    Camera camera;
+    buildMaterialShowcaseScene(scene, camera, 1.0f);
+
+    SceneStats stats = scene.getStats();
+    require(stats.object_count >= 7, "material showcase did not create the expected objects");
+    require(stats.path_light_count > 0, "material showcase produced no path-light candidates");
+    require(stats.top_level_bvh_node_count > 0, "material showcase did not build a TLAS");
+    require(stats.top_level_bvh_leaf_count > 0, "material showcase TLAS had no leaves");
+
+    Image<Color8> image(8, 8);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.max_bounces = 2;
+    settings.samples_per_frame = 1;
+    render::RenderFrameContext context{.scene_changed = true};
+    renderer.render(scene, camera, image, context, settings);
+
+    bool wrote_color = false;
+    for(int i = 0; i < image.getWidth() * image.getHeight(); ++i) {
+        Color8 pixel = image.getPixels()[i];
+        wrote_color = wrote_color || pixel.r > 0 || pixel.g > 0 || pixel.b > 0;
+    }
+    require(wrote_color, "material showcase render produced only black pixels");
+}
+
+void writeTransmissionScene(
+    const std::filesystem::path& gltf_path,
+    float roughness,
+    float metallic,
+    float transmission,
+    bool include_volume = false
+) {
+    std::filesystem::create_directories(gltf_path.parent_path());
+
+    const std::filesystem::path bin_path = gltf_path.parent_path() / "transmission_triangle.bin";
+    const float positions[] = {
+        -1.0f, -1.0f, -3.0f,
+         1.0f, -1.0f, -3.0f,
+         0.0f,  1.0f, -3.0f
+    };
+
+    {
+        std::ofstream bin(bin_path, std::ios::binary);
+        require(static_cast<bool>(bin), "failed to create synthetic transmission buffer");
+        bin.write(reinterpret_cast<const char*>(positions), sizeof(positions));
+    }
+
+    std::ofstream gltf(gltf_path);
+    require(static_cast<bool>(gltf), "failed to create synthetic transmission glTF");
+    gltf
+        << R"({
+  "asset": {"version": "2.0"},
+  "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior")"
+        << (include_volume ? R"(, "KHR_materials_volume")" : "")
+        << R"(],
+  "buffers": [{"uri": "transmission_triangle.bin", "byteLength": 36}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "accessors": [{
+    "bufferView": 0,
+    "byteOffset": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "min": [-1.0, -1.0, -3.0],
+    "max": [1.0, 1.0, -3.0]
+  }],
+  "materials": [{
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.8, 0.92, 1.0, 0.35],
+      "metallicFactor": )" << metallic << R"(,
+      "roughnessFactor": )" << roughness << R"(
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": )" << transmission << R"(},
+      "KHR_materials_ior": {"ior": 1.45})"
+        << (include_volume
+            ? R"(,
+      "KHR_materials_volume": {"attenuationColor": [0.8, 0.9, 1.0], "thicknessFactor": 0.22})"
+            : "")
+        << R"(
+    }
+  }],
+  "meshes": [{
+    "primitives": [{"attributes": {"POSITION": 0}, "material": 0}]
+  }],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+}
+
+void writeTexturedTransmissionScene(const std::filesystem::path& gltf_path) {
+    std::filesystem::create_directories(gltf_path.parent_path());
+
+    Image<Color8> orm(2, 2);
+    orm.getPixels()[0] = Color8(255,  32, 0, 255);
+    orm.getPixels()[1] = Color8( 64, 224, 0, 255);
+    orm.getPixels()[2] = Color8(180,  96, 0, 255);
+    orm.getPixels()[3] = Color8( 32, 180, 0, 255);
+
+    std::string png_error;
+    require(
+        savePng(orm, gltf_path.parent_path() / "textured_transmission_orm.png", png_error),
+        "failed to create synthetic textured transmission ORM texture"
+    );
+
+    const std::filesystem::path bin_path = gltf_path.parent_path() / "textured_transmission_triangle.bin";
+    const float positions[] = {
+        -1.0f, -1.0f, -3.0f,
+         1.0f, -1.0f, -3.0f,
+         0.0f,  1.0f, -3.0f
+    };
+
+    {
+        std::ofstream bin(bin_path, std::ios::binary);
+        require(static_cast<bool>(bin), "failed to create synthetic textured transmission buffer");
+        bin.write(reinterpret_cast<const char*>(positions), sizeof(positions));
+    }
+
+    std::ofstream gltf(gltf_path);
+    require(static_cast<bool>(gltf), "failed to create synthetic textured transmission glTF");
+    gltf
+        << R"({
+  "asset": {"version": "2.0"},
+  "extensionsUsed": ["KHR_materials_transmission"],
+  "buffers": [{"uri": "textured_transmission_triangle.bin", "byteLength": 36}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "accessors": [{
+    "bufferView": 0,
+    "byteOffset": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "min": [-1.0, -1.0, -3.0],
+    "max": [1.0, 1.0, -3.0]
+  }],
+  "images": [{"uri": "textured_transmission_orm.png", "mimeType": "image/png"}],
+  "textures": [{"source": 0}],
+  "materials": [{
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.85, 0.95, 1.0, 1.0],
+      "metallicRoughnessTexture": {"index": 0},
+      "metallicFactor": 1.0,
+      "roughnessFactor": 1.0
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": 1.0}
+    }
+  }],
+  "meshes": [{
+    "primitives": [{"attributes": {"POSITION": 0}, "material": 0}]
+  }],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+}
+
+void checkGltfTransmissionMapping() {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "astratrace_phase2_transmission";
+
+    const std::filesystem::path glass_path = root / "smooth_glass.gltf";
+    writeTransmissionScene(glass_path, 0.02f, 0.0f, 1.0f);
+    Scene glass_scene;
+    Camera camera;
+    camera.setHalfSize(glm::radians(90.0f), 1.0f);
+    GltfSceneLoadResult glass_result = io::gltf::loadSceneFromGLTF(glass_path.string(), glass_scene, camera, 1.0f);
+    require(glass_result.success, "smooth transmission glTF failed to load");
+    require(!glass_scene.getObjects().empty(), "smooth transmission scene imported no objects");
+    require(
+        static_cast<bool>(std::dynamic_pointer_cast<SmoothGlassMaterial>(glass_scene.getObjects()[0]->getMaterial())),
+        "smooth high-transmission material did not map to SmoothGlassMaterial"
+    );
+
+    const std::filesystem::path rough_path = root / "rough_transmission.gltf";
+    writeTransmissionScene(rough_path, 0.35f, 0.0f, 1.0f);
+    Scene rough_scene;
+    GltfSceneLoadResult rough_result = io::gltf::loadSceneFromGLTF(rough_path.string(), rough_scene, camera, 1.0f);
+    require(rough_result.success, "rough transmission glTF failed to load");
+    require(!rough_scene.getObjects().empty(), "rough transmission scene imported no objects");
+    require(
+        static_cast<bool>(std::dynamic_pointer_cast<SmoothGlassMaterial>(rough_scene.getObjects()[0]->getMaterial())),
+        "rough transmission material should map to SmoothGlassMaterial preview"
+    );
+    require(
+        rough_result.warning.find("KHR_materials_transmission") != std::string::npos,
+        "rough transmission preview did not report a warning"
+    );
+
+    const std::filesystem::path textured_path = root / "textured_transmission.gltf";
+    writeTexturedTransmissionScene(textured_path);
+    Scene textured_scene;
+    GltfSceneLoadResult textured_result =
+        io::gltf::loadSceneFromGLTF(textured_path.string(), textured_scene, camera, 1.0f);
+    require(textured_result.success, "textured transmission glTF failed to load");
+    require(!textured_scene.getObjects().empty(), "textured transmission scene imported no objects");
+    auto textured_glass =
+        std::dynamic_pointer_cast<SmoothGlassMaterial>(textured_scene.getObjects()[0]->getMaterial());
+    require(static_cast<bool>(textured_glass), "textured transmission material did not map to glass preview");
+    require(textured_glass->base_color != nullptr, "textured transmission glass did not receive a detail texture");
+    require(
+        textured_glass->surface_detail_strength > 0.0f,
+        "textured transmission glass did not receive surface detail strength"
+    );
+    Color detail_a = textured_glass->sampleBaseColor(glm::vec2(0.10f, 0.10f));
+    Color detail_b = textured_glass->sampleBaseColor(glm::vec2(0.90f, 0.90f));
+    require(
+        glm::abs(detail_a.r - detail_b.r) > 0.02f,
+        "textured transmission detail texture did not preserve variation"
+    );
+    SurfaceData textured_surface{};
+    textured_surface.hit_direction = HitDirection::ENTERING;
+    textured_surface.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+    textured_surface.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+    textured_surface.bitangent = glm::vec3(0.0f, 1.0f, 0.0f);
+    textured_surface.uv = glm::vec2(0.10f, 0.10f);
+    auto textured_bsdf = textured_glass->sampleBSDF(textured_surface);
+    BSDFSample textured_sample = textured_bsdf->sample(glm::vec3(0.25f, 0.25f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    require(
+        textured_sample.lobe == LobeType::Diffuse && !textured_sample.is_delta && textured_sample.pdf > 0.0f,
+        "textured transmission glass preview did not sample a surface-detail lobe"
+    );
+
+    const std::filesystem::path metallic_path = root / "metallic_transmission.gltf";
+    writeTransmissionScene(metallic_path, 0.02f, 1.0f, 1.0f);
+    Scene metallic_scene;
+    GltfSceneLoadResult metallic_result =
+        io::gltf::loadSceneFromGLTF(metallic_path.string(), metallic_scene, camera, 1.0f);
+    require(metallic_result.success, "metallic transmission glTF failed to load");
+    require(!metallic_scene.getObjects().empty(), "metallic transmission scene imported no objects");
+    require(
+        static_cast<bool>(std::dynamic_pointer_cast<PBRMaterial>(metallic_scene.getObjects()[0]->getMaterial())),
+        "metallic transmission material should remain PBR"
+    );
+    require(
+        metallic_result.warning.find("metallic transmission") != std::string::npos,
+        "metallic transmission fallback did not report a warning"
+    );
+
+    const std::filesystem::path smooth_volume_path = root / "smooth_volume_transmission.gltf";
+    writeTransmissionScene(smooth_volume_path, 0.02f, 0.0f, 1.0f, true);
+    Scene smooth_volume_scene;
+    GltfSceneLoadResult smooth_volume_result =
+        io::gltf::loadSceneFromGLTF(smooth_volume_path.string(), smooth_volume_scene, camera, 1.0f);
+    require(smooth_volume_result.success, "smooth volume transmission glTF failed to load");
+    require(!smooth_volume_scene.getObjects().empty(), "smooth volume transmission scene imported no objects");
+    auto smooth_volume_glass =
+        std::dynamic_pointer_cast<SmoothGlassMaterial>(smooth_volume_scene.getObjects()[0]->getMaterial());
+    require(
+        static_cast<bool>(smooth_volume_glass),
+        "smooth volume transmission material did not map to SmoothGlassMaterial preview"
+    );
+    require(
+        smooth_volume_result.warning.find("KHR_materials_volume") != std::string::npos,
+        "smooth volume transmission preview did not report a volume warning"
+    );
+
+    const std::filesystem::path rough_volume_path = root / "rough_volume_transmission.gltf";
+    writeTransmissionScene(rough_volume_path, 0.35f, 0.0f, 1.0f, true);
+    Scene rough_volume_scene;
+    GltfSceneLoadResult rough_volume_result =
+        io::gltf::loadSceneFromGLTF(rough_volume_path.string(), rough_volume_scene, camera, 1.0f);
+    require(rough_volume_result.success, "rough volume transmission glTF failed to load");
+    require(!rough_volume_scene.getObjects().empty(), "rough volume transmission scene imported no objects");
+    require(
+        static_cast<bool>(
+            std::dynamic_pointer_cast<SmoothGlassMaterial>(rough_volume_scene.getObjects()[0]->getMaterial())
+        ),
+        "rough volume transmission material should map to SmoothGlassMaterial preview"
+    );
+    require(
+        rough_volume_result.warning.find("KHR_materials_transmission") != std::string::npos,
+        "rough volume transmission preview did not report a transmission warning"
+    );
+    require(
+        rough_volume_result.warning.find("KHR_materials_volume") != std::string::npos,
+        "rough volume transmission preview did not report a volume warning"
+    );
+}
+
+void writeIridescenceScene(const std::filesystem::path& gltf_path) {
+    std::filesystem::create_directories(gltf_path.parent_path());
+
+    const std::filesystem::path bin_path = gltf_path.parent_path() / "iridescence_triangle.bin";
+    const float positions[] = {
+        -1.0f, -1.0f, -3.0f,
+         1.0f, -1.0f, -3.0f,
+         0.0f,  1.0f, -3.0f
+    };
+
+    {
+        std::ofstream bin(bin_path, std::ios::binary);
+        require(static_cast<bool>(bin), "failed to create synthetic iridescence buffer");
+        bin.write(reinterpret_cast<const char*>(positions), sizeof(positions));
+    }
+
+    std::ofstream gltf(gltf_path);
+    require(static_cast<bool>(gltf), "failed to create synthetic iridescence glTF");
+    gltf
+        << R"({
+  "asset": {"version": "2.0"},
+  "extensionsUsed": ["KHR_materials_iridescence"],
+  "buffers": [{"uri": "iridescence_triangle.bin", "byteLength": 36}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "accessors": [{
+    "bufferView": 0,
+    "byteOffset": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "min": [-1.0, -1.0, -3.0],
+    "max": [1.0, 1.0, -3.0]
+  }],
+  "materials": [{
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+      "metallicFactor": 1.0,
+      "roughnessFactor": 0.1
+    },
+    "extensions": {
+      "KHR_materials_iridescence": {
+        "iridescenceFactor": 1.0,
+        "iridescenceIor": 1.33,
+        "iridescenceThicknessMaximum": 400.0
+      }
+    }
+  }],
+  "meshes": [{
+    "primitives": [{"attributes": {"POSITION": 0}, "material": 0}]
+  }],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+}
+
+void checkGltfIridescenceFallback() {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "astratrace_phase2_iridescence" / "iridescence_triangle.gltf";
+    writeIridescenceScene(path);
+
+    Scene scene;
+    Camera camera;
+    camera.setHalfSize(glm::radians(90.0f), 1.0f);
+    GltfSceneLoadResult result = io::gltf::loadSceneFromGLTF(path.string(), scene, camera, 1.0f);
+    require(result.success, "iridescence glTF failed to load");
+    require(!scene.getObjects().empty(), "iridescence scene imported no objects");
+    require(
+        result.warning.find("KHR_materials_iridescence") != std::string::npos,
+        "iridescence fallback did not report a warning"
+    );
+
+    auto pbr = std::dynamic_pointer_cast<PBRMaterial>(scene.getObjects()[0]->getMaterial());
+    require(static_cast<bool>(pbr), "iridescence material should remain a PBR preview material");
+
+    ColorA base = pbr->sampleBaseColor(glm::vec2(0.5f));
+    Color mr = pbr->sampleMetalRoughness(glm::vec2(0.5f));
+    require(
+        glm::max(base.r, glm::max(base.g, base.b)) > 0.05f,
+        "iridescence fallback imported as a black material"
+    );
+    require(mr.r < 0.75f, "iridescence fallback remained fully metallic");
+    require(mr.g > 0.45f, "iridescence fallback remained too glossy");
+}
+
+void writeGuideTextureScene(const std::filesystem::path& gltf_path) {
+    std::filesystem::create_directories(gltf_path.parent_path());
+
+    Image<Color8> guide(4, 4);
+    guide.clear(Color8(0, 0, 0, 0));
+    guide.getPixels()[2 * 4 + 2] = Color8(0, 0, 0, 255);
+
+    std::string png_error;
+    require(
+        savePng(guide, gltf_path.parent_path() / "guide.png", png_error),
+        "failed to create synthetic guide texture"
+    );
+
+    const std::filesystem::path bin_path = gltf_path.parent_path() / "guide_triangle.bin";
+    const float positions[] = {
+        -1.0f, -1.0f, -3.0f,
+         1.0f, -1.0f, -3.0f,
+         0.0f,  1.0f, -3.0f
+    };
+    const float uvs[] = {
+        0.625f, 0.625f,
+        0.625f, 0.625f,
+        0.625f, 0.625f
+    };
+
+    {
+        std::ofstream bin(bin_path, std::ios::binary);
+        require(static_cast<bool>(bin), "failed to create synthetic guide buffer");
+        bin.write(reinterpret_cast<const char*>(positions), sizeof(positions));
+        bin.write(reinterpret_cast<const char*>(uvs), sizeof(uvs));
+    }
+
+    std::ofstream gltf(gltf_path);
+    require(static_cast<bool>(gltf), "failed to create synthetic guide glTF");
+    gltf
+        << R"({
+  "asset": {"version": "2.0"},
+  "buffers": [{"uri": "guide_triangle.bin", "byteLength": 60}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 24}
+  ],
+  "accessors": [{
+    "bufferView": 0,
+    "byteOffset": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "min": [-1.0, -1.0, -3.0],
+    "max": [1.0, 1.0, -3.0]
+  }, {
+    "bufferView": 1,
+    "byteOffset": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC2"
+  }],
+  "images": [{"uri": "guide.png", "mimeType": "image/png"}],
+  "textures": [{"source": 0}],
+  "materials": [{
+    "name": "Guides Material",
+    "alphaMode": "BLEND",
+    "pbrMetallicRoughness": {
+      "baseColorTexture": {"index": 0},
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.5
+    }
+  }],
+  "meshes": [{
+    "primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "material": 0}]
+  }],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+}
+
+void checkGltfGuideTextureFallback() {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "astratrace_phase2_guides" / "guide_triangle.gltf";
+    writeGuideTextureScene(path);
+
+    Scene scene;
+    Camera camera;
+    camera.setHalfSize(glm::radians(90.0f), 1.0f);
+    GltfSceneLoadResult result = io::gltf::loadSceneFromGLTF(path.string(), scene, camera, 1.0f);
+    require(result.success, "guide texture glTF failed to load");
+    require(!scene.getObjects().empty(), "guide texture scene imported no objects");
+    require(
+        result.warning.find("guide/label") != std::string::npos,
+        "guide texture fallback did not report a warning"
+    );
+
+    auto pbr = std::dynamic_pointer_cast<PBRMaterial>(scene.getObjects()[0]->getMaterial());
+    require(static_cast<bool>(pbr), "guide material should remain PBR");
+    ColorA base = pbr->sampleBaseColor(glm::vec2(0.625f));
+    Color emission = pbr->sampleEmissive(glm::vec2(0.625f));
+    require(base.r > 0.6f && base.g > 0.6f && base.b > 0.6f, "guide texture remained dark");
+    require(base.a > 0.9f, "guide texture lost alpha coverage");
+    require(
+        glm::max(emission.r, glm::max(emission.g, emission.b)) > 0.2f,
+        "guide texture did not receive visible-only emission"
+    );
+    require(
+        glm::max(
+            pbr->getAverageEmissivePower().r,
+            glm::max(pbr->getAverageEmissivePower().g, pbr->getAverageEmissivePower().b)
+        ) == 0.0f,
+        "guide texture should not become a path-light candidate"
+    );
+    require(!pbr->castsShadows(), "guide texture should not cast annotation shadows");
+}
+
+void checkPngExportUtility() {
+    Scene scene;
+    Camera camera;
+    buildMaterialShowcaseScene(scene, camera, 1.0f);
+
+    Image<Color8> image(8, 8);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::Temporal;
+    settings.samples_per_frame = 1;
+    settings.max_bounces = 2;
+    render::RenderFrameContext context{.scene_changed = true};
+    renderer.render(scene, camera, image, context, settings);
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "astratrace_phase2_export" / "showcase.png";
+    std::string error;
+    require(savePng(image, path, error), "PNG export utility failed");
+    require(std::filesystem::exists(path), "PNG export utility did not create a file");
+    require(std::filesystem::file_size(path) > 0, "PNG export utility created an empty file");
+}
+
 void checkRequiredScenes() {
     struct SceneCase {
         const char* path;
@@ -159,6 +665,8 @@ void checkRequiredScenes() {
         }
 
         scene.update();
+        SceneStats stats = scene.getStats();
+        require(stats.top_level_bvh_node_count > 0, "scene update did not build a TLAS");
         require(!scene.getPathLights().empty(), "scene produced no path-light candidates");
 
         Image<Color8> image(8, 8);
@@ -298,6 +806,11 @@ int main() {
         checkShapeSampling();
         checkBSDF();
         checkRendererHistory();
+        checkMaterialShowcase();
+        checkGltfTransmissionMapping();
+        checkGltfIridescenceFallback();
+        checkGltfGuideTextureFallback();
+        checkPngExportUtility();
         checkRequiredScenes();
         checkLoadedLightOrientation();
     } catch(const std::exception& error) {

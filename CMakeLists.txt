@@ -176,3 +176,50 @@ if(Python3_Interpreter_FOUND)
         COMMENT "Checking include boundary rules"
     )
 endif()
+
+add_executable(astratrace_bvh_benchmark EXCLUDE_FROM_ALL
+    tools/bvh_benchmark.cpp
+)
+target_include_directories(astratrace_bvh_benchmark PRIVATE
+    ${ASTRATRACE_PUBLIC_INCLUDES}
+)
+target_link_libraries(astratrace_bvh_benchmark PRIVATE
+    astratrace_io_gltf
+    astratrace_scene
+    astratrace_core
+    glm
+)
+
+add_custom_target(benchmark_bvh
+    COMMAND $<TARGET_FILE:astratrace_bvh_benchmark> ${CMAKE_CURRENT_SOURCE_DIR}/scenes/sponza.glb 65536
+    DEPENDS astratrace_bvh_benchmark
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Running BVH traversal benchmark"
+)
+
+add_executable(astratrace_material_probe EXCLUDE_FROM_ALL
+    tools/material_probe.cpp
+)
+target_include_directories(astratrace_material_probe PRIVATE
+    ${ASTRATRACE_PUBLIC_INCLUDES}
+)
+target_link_libraries(astratrace_material_probe PRIVATE
+    astratrace_io_gltf
+    astratrace_scene
+    astratrace_core
+    glm
+)
+
+add_executable(astratrace_material_closeup_render EXCLUDE_FROM_ALL
+    tools/material_closeup_render.cpp
+)
+target_include_directories(astratrace_material_closeup_render PRIVATE
+    ${ASTRATRACE_PUBLIC_INCLUDES}
+)
+target_link_libraries(astratrace_material_closeup_render PRIVATE
+    astratrace_io_gltf
+    astratrace_render_cpu
+    astratrace_scene
+    astratrace_core
+    glm
+)

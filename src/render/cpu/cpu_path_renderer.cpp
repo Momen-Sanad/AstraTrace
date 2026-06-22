@@ -18,12 +18,19 @@ float luminance(Color color) {
     return glm::dot(color, Color(0.2126f, 0.7152f, 0.0722f));
 }
 
-bool compatibleHistory(const PathResult& a, const PathResult& b) {
+float historyDepth(const PathResult& path, const Camera& camera) {
+    if(path.object_id == 0) return 0.0f;
+    return glm::length(path.hit_position - camera.getPosition());
+}
+
+bool compatibleHistory(const PathResult& a, const PathResult& b, float a_depth, float b_depth) {
     if(a.object_id != b.object_id) return false;
     if(a.object_id == 0) return true;
     if(glm::dot(a.shading_normal, b.shading_normal) < 0.75f) return false;
     float d2 = glm::dot(a.hit_position - b.hit_position, a.hit_position - b.hit_position);
-    return d2 < 0.02f;
+    if(d2 >= 0.02f) return false;
+    float depth_tolerance = glm::max(0.025f, 0.03f * glm::max(a_depth, b_depth));
+    return glm::abs(a_depth - b_depth) <= depth_tolerance;
 }
 
 }
@@ -38,6 +45,7 @@ void CpuPathRenderer::ensureBuffers(int width, int height) {
     svgf_current.assign(count, {});
     accumulated_samples = 0;
     next_sample_index = 0;
+    has_previous_camera = false;
 }
 
 void CpuPathRenderer::clearHistory() {
@@ -46,6 +54,7 @@ void CpuPathRenderer::clearHistory() {
     std::fill(svgf_current.begin(), svgf_current.end(), HistoryPixel{});
     accumulated_samples = 0;
     next_sample_index = 0;
+    has_previous_camera = false;
 }
 
 void CpuPathRenderer::reset() {
@@ -109,6 +118,27 @@ Color CpuPathRenderer::denoiseSVGF(
     return sum / weight_sum;
 }
 
+int CpuPathRenderer::findReprojectedHistoryIndex(
+    const PathResult& current,
+    int current_index,
+    int width,
+    int height,
+    bool camera_changed
+) const {
+    if(!camera_changed) return current_index;
+    if(!has_previous_camera || current.object_id == 0) return -1;
+
+    glm::vec2 previous_uv(0.0f);
+    float previous_depth = 0.0f;
+    if(!previous_camera.projectWorldToUV(current.hit_position, previous_uv, previous_depth)) {
+        return -1;
+    }
+
+    int previous_x = glm::clamp(static_cast<int>(previous_uv.x * static_cast<float>(width)), 0, width - 1);
+    int previous_y = glm::clamp(static_cast<int>(previous_uv.y * static_cast<float>(height)), 0, height - 1);
+    return previous_y * width + previous_x;
+}
+
 void CpuPathRenderer::render(
     const Scene& scene,
     const Camera& camera,
@@ -124,16 +154,14 @@ void CpuPathRenderer::render(
     settings.max_bounces = glm::clamp(settings.max_bounces, 1, 32);
     settings.samples_per_frame = glm::clamp(settings.samples_per_frame, 1, 64);
 
-    if(
-        settings.reset_requested ||
-        context.camera_changed ||
-        context.scene_changed ||
-        context.settings_changed ||
-        !(settings == last_settings)
-    ) {
+    PathRenderSettings comparable_settings = settings;
+    comparable_settings.reset_requested = false;
+    bool settings_changed = context.settings_changed || !(comparable_settings == last_settings);
+    bool reset_for_camera = context.camera_changed && settings.denoiser == PathDenoiserMode::Temporal;
+    if(settings.reset_requested || context.scene_changed || settings_changed || reset_for_camera) {
         clearHistory();
     }
-    last_settings = settings;
+    last_settings = comparable_settings;
 
     const std::size_t pixel_count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     std::vector<PathResult> current(pixel_count);
@@ -176,6 +204,8 @@ void CpuPathRenderer::render(
         for(int i = 0; i < static_cast<int>(pixel_count); ++i) {
             pixels[i] = encodeColor(tonemap_aces(current_color[static_cast<std::size_t>(i)]));
         }
+        previous_camera = camera;
+        has_previous_camera = true;
         return;
     }
 
@@ -187,6 +217,8 @@ void CpuPathRenderer::render(
             Color average = accumulation[static_cast<std::size_t>(i)] / static_cast<float>(accumulated_samples);
             pixels[i] = encodeColor(tonemap_aces(average));
         }
+        previous_camera = camera;
+        has_previous_camera = true;
         return;
     }
 
@@ -196,28 +228,46 @@ void CpuPathRenderer::render(
             int index = y * width + x;
             std::size_t idx = static_cast<std::size_t>(index);
             Color spatial = denoiseSVGF(current, x, y, width, height);
-            const HistoryPixel& history = svgf_history[idx];
+            int history_index = findReprojectedHistoryIndex(
+                current[idx],
+                index,
+                width,
+                height,
+                context.camera_changed
+            );
+            const HistoryPixel* history = history_index >= 0
+                ? &svgf_history[static_cast<std::size_t>(history_index)]
+                : nullptr;
+            float current_depth = historyDepth(current[idx], camera);
+            bool has_compatible_history =
+                history &&
+                history->frames > 0 &&
+                compatibleHistory(current[idx], history->path, current_depth, history->depth);
 
             float alpha = 0.18f;
-            if(history.frames == 0 || !compatibleHistory(current[idx], history.path)) {
+            if(!has_compatible_history) {
                 alpha = 1.0f;
             } else {
                 float lum_now = luminance(spatial);
-                float lum_history = luminance(history.color);
+                float lum_history = luminance(history->color);
                 float diff = glm::abs(lum_now - lum_history);
                 alpha = glm::clamp(0.08f + diff * 0.08f, 0.08f, 0.65f);
             }
 
-            Color blended = alpha * spatial + (1.0f - alpha) * history.color;
+            Color history_color = has_compatible_history ? history->color : Color(0.0f);
+            Color blended = alpha * spatial + (1.0f - alpha) * history_color;
             svgf_current[idx].path = current[idx];
             svgf_current[idx].color = sanitize(blended);
-            svgf_current[idx].frames = history.frames + 1u;
+            svgf_current[idx].depth = current_depth;
+            svgf_current[idx].frames = has_compatible_history ? history->frames + 1u : 1u;
             pixels[index] = encodeColor(tonemap_aces(svgf_current[idx].color));
         }
     }
 
     svgf_history.swap(svgf_current);
     accumulated_samples = glm::min<uint32_t>(accumulated_samples + settings.samples_per_frame, 0xffffffffu);
+    previous_camera = camera;
+    has_previous_camera = true;
 }
 
 } // namespace render::cpu

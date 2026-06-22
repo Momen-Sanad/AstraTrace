@@ -48,7 +48,6 @@ float lightWeight(
     case PathLightSamplerMode::Power:
         return glm::max(0.0f, light->power());
     case PathLightSamplerMode::PartialBRDF:
-    case PathLightSamplerMode::Tree:
         return glm::max(0.0f, light->estimatePowerAt(point, normal));
     case PathLightSamplerMode::Uniform:
     default:
@@ -259,7 +258,9 @@ PathResult PathIntegrator::trace(
     bool has_primary = false;
     bool any_non_delta = false;
 
-    for(int bounce = 0; bounce < settings.max_bounces; ++bounce) {
+    int bounce = 0;
+    int passthrough_count = 0;
+    while(bounce < settings.max_bounces) {
         RayHit hit;
         std::shared_ptr<SceneObject> object = scene.findClosestHit(ray, hit);
         if(!object) {
@@ -290,6 +291,14 @@ PathResult PathIntegrator::trace(
         if(!bsdf) break;
 
         glm::vec3 view = -ray.direction;
+        float coverage = bsdf->getCoverage(view);
+        if(coverage < 1.0f && sampler.next() > coverage) {
+            ray.origin = point + RAY_EPSILON * ray.direction;
+            if(++passthrough_count > 32) break;
+            continue;
+        }
+        passthrough_count = 0;
+
         if(!has_primary) {
             has_primary = true;
             result.object_id = object->getID();
@@ -326,10 +335,24 @@ PathResult PathIntegrator::trace(
             }
         }
 
-        float coverage = bsdf->getCoverage(view);
-        if(coverage < 1.0f && sampler.next() > coverage) {
-            ray.origin = point + RAY_EPSILON * ray.direction;
-            continue;
+        if(bounce == 0 && !bsdf->isDelta()) {
+            Color ambient = scene.getAmbient();
+            if(maxChannel(ambient) > 0.0f) {
+                addContribution(
+                    result,
+                    throughput * ambient * bsdf->getSubsurfaceAlbedo(),
+                    previous_lobe,
+                    true,
+                    true
+                );
+                addContribution(
+                    result,
+                    throughput * ambient * bsdf->getSpecularColor() * 0.28f,
+                    LobeType::Specular,
+                    true,
+                    true
+                );
+            }
         }
 
         if(settings.enable_nee && !bsdf->isDelta()) {
@@ -374,6 +397,7 @@ PathResult PathIntegrator::trace(
 
         ray.origin = point + RAY_EPSILON * sample.direction;
         ray.direction = glm::normalize(sample.direction);
+        ++bounce;
     }
 
     return result;

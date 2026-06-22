@@ -30,6 +30,13 @@ private:
     void ensureBuffers(int width, int height);
     void clearHistory();
     Color denoiseSVGF(const std::vector<PathResult>& current, int x, int y, int width, int height) const;
+    int findReprojectedHistoryIndex(
+        const PathResult& current,
+        int current_index,
+        int width,
+        int height,
+        bool camera_changed
+    ) const;
 
     PathIntegrator integrator;
     std::vector<Color> accumulation;
@@ -40,6 +47,8 @@ private:
     uint32_t accumulated_samples = 0;
     uint64_t next_sample_index = 0;
     PathRenderSettings last_settings;
+    Camera previous_camera;
+    bool has_previous_camera = false;
 };
 
 } // namespace render::cpu

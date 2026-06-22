@@ -124,19 +124,6 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(astratrace_render_cpu PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
-add_library(astratrace_render_gpu STATIC
-    src/render/gpu/gpu_path_renderer.cpp
-)
-target_include_directories(astratrace_render_gpu PUBLIC ${ASTRATRACE_PUBLIC_INCLUDES})
-target_link_libraries(astratrace_render_gpu PUBLIC
-    astratrace_render_cpu
-    astratrace_render_common
-    astratrace_scene
-    astratrace_core
-    SDL3::SDL3-shared
-    glm
-)
-
 add_executable(astratrace_app
     src/app/main.cpp
     src/app/application.cpp
@@ -152,7 +139,6 @@ target_link_libraries(astratrace_app PRIVATE
     astratrace_io_gltf
     astratrace_render_common
     astratrace_render_cpu
-    astratrace_render_gpu
     astratrace_scene
     astratrace_core
     imgui

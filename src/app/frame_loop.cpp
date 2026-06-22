@@ -17,7 +17,6 @@ namespace {
 constexpr const char* WINDOW_TITLE = "AstraTrace";
 constexpr const char* BACKEND_LABEL_CPU_WHITTED = "CPU Whitted";
 constexpr const char* BACKEND_LABEL_CPU_PATH = "CPU Path";
-constexpr const char* BACKEND_LABEL_GPU_PATH = "GPU Path";
 
 std::string toLowerAscii(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
@@ -107,8 +106,6 @@ const char* backendToLabel(render::RenderBackend backend) {
     switch(backend) {
     case render::RenderBackend::CpuPath:
         return BACKEND_LABEL_CPU_PATH;
-    case render::RenderBackend::GpuPath:
-        return BACKEND_LABEL_GPU_PATH;
     case render::RenderBackend::CpuWhitted:
     default:
         return BACKEND_LABEL_CPU_WHITTED;
@@ -119,8 +116,6 @@ render::RenderBackend backendFromIndex(int index) {
     switch(index) {
     case 1:
         return render::RenderBackend::CpuPath;
-    case 2:
-        return render::RenderBackend::GpuPath;
     case 0:
     default:
         return render::RenderBackend::CpuWhitted;
@@ -390,7 +385,7 @@ int FrameLoop::run() {
 
         ImGui::Separator();
         if(ImGui::BeginCombo("Backend", backendToLabel(selected_backend))) {
-            for(int i = 0; i < 3; ++i) {
+            for(int i = 0; i < 2; ++i) {
                 const render::RenderBackend backend_option = backendFromIndex(i);
                 bool selected = (selected_backend == backend_option);
                 if(ImGui::Selectable(backendToLabel(backend_option), selected)) {
@@ -406,7 +401,7 @@ int FrameLoop::run() {
         }
 
         ImGui::Text("Active backend: %s", backendToLabel(active_backend));
-        if(active_backend == render::RenderBackend::CpuPath || active_backend == render::RenderBackend::GpuPath) {
+        if(active_backend == render::RenderBackend::CpuPath) {
             ImGui::Separator();
             ImGui::TextUnformatted("Path Tracing");
 
@@ -422,7 +417,7 @@ int FrameLoop::run() {
                 path_settings.denoiser = static_cast<render::PathDenoiserMode>(denoiser_index);
             }
 
-            const char* light_sampler_items[] = {"Uniform", "Power", "Partial BRDF", "Light Tree"};
+            const char* light_sampler_items[] = {"Uniform", "Power", "Contribution"};
             int light_sampler_index = static_cast<int>(path_settings.light_sampler);
             if(ImGui::Combo(
                 "Light Sampler",

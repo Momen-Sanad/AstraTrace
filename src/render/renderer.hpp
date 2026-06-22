@@ -13,7 +13,6 @@ namespace render {
 enum class RenderBackend {
     CpuWhitted,
     CpuPath,
-    GpuPath,
 };
 
 enum class PathSamplerMode {
@@ -26,7 +25,6 @@ enum class PathLightSamplerMode {
     Uniform,
     Power,
     PartialBRDF,
-    Tree,
 };
 
 enum class PathDenoiserMode {
@@ -37,7 +35,7 @@ enum class PathDenoiserMode {
 
 struct PathRenderSettings {
     PathSamplerMode sampler = PathSamplerMode::Sobol;
-    PathLightSamplerMode light_sampler = PathLightSamplerMode::Tree;
+    PathLightSamplerMode light_sampler = PathLightSamplerMode::PartialBRDF;
     PathDenoiserMode denoiser = PathDenoiserMode::SVGF;
     int max_bounces = 5;
     int samples_per_frame = 1;

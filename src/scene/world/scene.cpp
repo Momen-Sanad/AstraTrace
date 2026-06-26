@@ -13,7 +13,7 @@ void expandBounds(AABB& dst, const AABB& src) {
     dst.max = glm::max(dst.max, src.max);
 }
 
-bool intersectAABB(const AABB& box, const Ray& ray, float t_min, float t_max) {
+bool intersectAABB(const AABB& box, const Ray& ray, float t_min, float t_max, float* t_entry = nullptr) {
     for(int axis = 0; axis < 3; ++axis) {
         const float dir = ray.direction[axis];
         if(std::abs(dir) < 1e-8f) {
@@ -31,6 +31,7 @@ bool intersectAABB(const AABB& box, const Ray& ray, float t_min, float t_max) {
         t_max = glm::min(t_max, t1);
         if(t_max < t_min) return false;
     }
+    if(t_entry) *t_entry = t_min;
     return true;
 }
 
@@ -103,8 +104,35 @@ bool Scene::anyHit(const Ray& ray, float max_distance) const {
             continue;
         }
 
-        if(node.left >= 0) stack.push_back(node.left);
-        if(node.right >= 0) stack.push_back(node.right);
+        float left_t = std::numeric_limits<float>::max();
+        float right_t = std::numeric_limits<float>::max();
+        bool hit_left = node.left >= 0 && intersectAABB(
+            top_level_bvh_nodes[static_cast<std::size_t>(node.left)].bounds,
+            ray,
+            1e-5f,
+            max_distance,
+            &left_t
+        );
+        bool hit_right = node.right >= 0 && intersectAABB(
+            top_level_bvh_nodes[static_cast<std::size_t>(node.right)].bounds,
+            ray,
+            1e-5f,
+            max_distance,
+            &right_t
+        );
+        if(hit_left && hit_right) {
+            if(left_t < right_t) {
+                stack.push_back(node.right);
+                stack.push_back(node.left);
+            } else {
+                stack.push_back(node.left);
+                stack.push_back(node.right);
+            }
+        } else if(hit_left) {
+            stack.push_back(node.left);
+        } else if(hit_right) {
+            stack.push_back(node.right);
+        }
     }
 
     return false;
@@ -158,8 +186,35 @@ std::shared_ptr<SceneObject> Scene::findClosestHit(const Ray& ray, RayHit& hit) 
             continue;
         }
 
-        if(node.left >= 0) stack.push_back(node.left);
-        if(node.right >= 0) stack.push_back(node.right);
+        float left_t = std::numeric_limits<float>::max();
+        float right_t = std::numeric_limits<float>::max();
+        bool hit_left = node.left >= 0 && intersectAABB(
+            top_level_bvh_nodes[static_cast<std::size_t>(node.left)].bounds,
+            ray,
+            1e-5f,
+            closest_distance,
+            &left_t
+        );
+        bool hit_right = node.right >= 0 && intersectAABB(
+            top_level_bvh_nodes[static_cast<std::size_t>(node.right)].bounds,
+            ray,
+            1e-5f,
+            closest_distance,
+            &right_t
+        );
+        if(hit_left && hit_right) {
+            if(left_t < right_t) {
+                stack.push_back(node.right);
+                stack.push_back(node.left);
+            } else {
+                stack.push_back(node.left);
+                stack.push_back(node.right);
+            }
+        } else if(hit_left) {
+            stack.push_back(node.left);
+        } else if(hit_right) {
+            stack.push_back(node.right);
+        }
     }
 
     return hit_object;

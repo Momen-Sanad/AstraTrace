@@ -326,6 +326,7 @@ int runExport(const AppConfig& config) {
         settings.light_sampler = config.light_sampler;
         settings.denoiser = config.denoiser;
         settings.max_bounces = config.bounces;
+        settings.accumulate_samples = config.denoiser != render::PathDenoiserMode::SVGF;
 
         int remaining = config.samples;
         uint64_t frame_index = 0;

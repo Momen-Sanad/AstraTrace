@@ -24,6 +24,7 @@ bool Sphere::intersect(const Ray& ray, RayHit& hit) const {
     float t = to - d;
     if(t > 1e-5f) {
         hit.distance = t;
+        hit.object_distance = t;
         glm::vec3 normal = ((ray.origin + t * ray.direction) - center) / radius;
         hit.surface_coords = normal;
         hit.surface_id = normal.z > 0.0f ? 0 : 1;
@@ -32,6 +33,7 @@ bool Sphere::intersect(const Ray& ray, RayHit& hit) const {
     t = to + d;
     if(t > 1e-5f) {
         hit.distance = t;
+        hit.object_distance = t;
         glm::vec3 normal = ((ray.origin + t * ray.direction) - center) / radius;
         hit.surface_coords = normal;
         hit.surface_id = normal.z > 0.0f ? 0 : 1;
@@ -59,6 +61,7 @@ SurfaceData Sphere::getSurfaceData(const Ray& ray, const RayHit& hit) const {
     if(u < 0.0f) u += 1.0f;
     float v = 0.5f * std::asin(normal.y) / glm::radians(90.0f) + 0.5f;
     surface.uv = glm::vec2(u, v);
+    surface.uv1 = surface.uv;
 
     if(glm::dot(ray.direction, surface.normal) > 0.0f) {
         surface.normal *= -1.0f;
@@ -94,11 +97,24 @@ void Sphere::samplePoint(
     glm::vec2& uv,
     float& pdf
 ) const {
+    glm::vec2 uv1;
+    samplePoint(u, position, normal, uv, uv1, pdf);
+}
+
+void Sphere::samplePoint(
+    const glm::vec3& u,
+    glm::vec3& position,
+    glm::vec3& normal,
+    glm::vec2& uv,
+    glm::vec2& uv1,
+    float& pdf
+) const {
     normal = sampleUnitSphere(glm::vec2(u));
     position = center + radius * normal;
     float tex_u = std::atan2(normal.z, normal.x) / glm::two_pi<float>();
     if(tex_u < 0.0f) tex_u += 1.0f;
     float tex_v = 0.5f * std::asin(normal.y) / glm::half_pi<float>() + 0.5f;
     uv = glm::vec2(tex_u, tex_v);
+    uv1 = uv;
     pdf = 1.0f / surfaceArea();
 }

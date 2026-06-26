@@ -16,7 +16,7 @@ void expandBounds(AABB& dst, const glm::vec3& point) {
     dst.max = glm::max(dst.max, point);
 }
 
-bool intersectAABB(const AABB& box, const Ray& ray, float t_min, float t_max) {
+bool intersectAABB(const AABB& box, const Ray& ray, float t_min, float t_max, float* t_entry = nullptr) {
     for(int axis = 0; axis < 3; ++axis) {
         const float dir = ray.direction[axis];
         if(std::abs(dir) < 1e-8f) {
@@ -34,6 +34,7 @@ bool intersectAABB(const AABB& box, const Ray& ray, float t_min, float t_max) {
         t_max = glm::min(t_max, t1);
         if(t_max < t_min) return false;
     }
+    if(t_entry) *t_entry = t_min;
     return true;
 }
 
@@ -150,8 +151,35 @@ bool TriangleMesh::intersect(const Ray& ray, RayHit& hit) const {
             continue;
         }
 
-        if(node.left >= 0) stack.push_back(node.left);
-        if(node.right >= 0) stack.push_back(node.right);
+        float left_t = std::numeric_limits<float>::max();
+        float right_t = std::numeric_limits<float>::max();
+        bool hit_left = node.left >= 0 && intersectAABB(
+            nodes[static_cast<std::size_t>(node.left)].bounds,
+            ray,
+            ray_epsilon,
+            closest_distance,
+            &left_t
+        );
+        bool hit_right = node.right >= 0 && intersectAABB(
+            nodes[static_cast<std::size_t>(node.right)].bounds,
+            ray,
+            ray_epsilon,
+            closest_distance,
+            &right_t
+        );
+        if(hit_left && hit_right) {
+            if(left_t < right_t) {
+                stack.push_back(node.right);
+                stack.push_back(node.left);
+            } else {
+                stack.push_back(node.left);
+                stack.push_back(node.right);
+            }
+        } else if(hit_left) {
+            stack.push_back(node.left);
+        } else if(hit_right) {
+            stack.push_back(node.right);
+        }
     }
 
     if(has_hit) {
@@ -168,6 +196,7 @@ SurfaceData TriangleMesh::getSurfaceData(const Ray& ray, const RayHit& hit) cons
         fallback.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
         fallback.bitangent = glm::vec3(0.0f, 0.0f, 1.0f);
         fallback.uv = glm::vec2(0.0f);
+        fallback.uv1 = glm::vec2(0.0f);
         return fallback;
     }
     return triangles[hit.surface_id].getSurfaceData(ray, hit);
@@ -185,10 +214,23 @@ void TriangleMesh::samplePoint(
     glm::vec2& uv,
     float& pdf
 ) const {
+    glm::vec2 uv1;
+    samplePoint(u, position, normal, uv, uv1, pdf);
+}
+
+void TriangleMesh::samplePoint(
+    const glm::vec3& u,
+    glm::vec3& position,
+    glm::vec3& normal,
+    glm::vec2& uv,
+    glm::vec2& uv1,
+    float& pdf
+) const {
     if(triangles.empty() || total_area <= 0.0f) {
         position = glm::vec3(0.0f);
         normal = glm::vec3(0.0f, 1.0f, 0.0f);
         uv = glm::vec2(0.0f);
+        uv1 = glm::vec2(0.0f);
         pdf = 0.0f;
         return;
     }
@@ -198,7 +240,7 @@ void TriangleMesh::samplePoint(
     std::size_t triangle_index = static_cast<std::size_t>(std::distance(triangle_area_cdf.begin(), it));
     if(triangle_index >= triangles.size()) triangle_index = triangles.size() - 1;
 
-    triangles[triangle_index].samplePoint(u, position, normal, uv, pdf);
+    triangles[triangle_index].samplePoint(u, position, normal, uv, uv1, pdf);
     pdf = total_area > 0.0f ? 1.0f / total_area : 0.0f;
 }
 

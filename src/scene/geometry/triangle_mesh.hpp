@@ -21,6 +21,14 @@ public:
         glm::vec2& uv,
         float& pdf
     ) const override;
+    void samplePoint(
+        const glm::vec3& u,
+        glm::vec3& position,
+        glm::vec3& normal,
+        glm::vec2& uv,
+        glm::vec2& uv1,
+        float& pdf
+    ) const override;
     float computePDF(const Ray& ray, const RayHit& hit) const override;
 
 private:

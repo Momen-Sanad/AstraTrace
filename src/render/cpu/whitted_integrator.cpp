@@ -20,15 +20,15 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
         SurfaceData surface = object->getSurfaceData(ray, hit);
 
         if(auto pbr = std::dynamic_pointer_cast<PBRMaterial>(material)) {
-            glm::vec3 normal = computeGlobalNormal(surface, pbr->sampleNormal(surface.uv));
-            ColorA color_alpha = pbr->sampleBaseColor(surface.uv);
+            glm::vec3 normal = computeGlobalNormal(surface, pbr->sampleNormal(surface));
+            ColorA color_alpha = pbr->sampleBaseColor(surface);
             Color color = Color(color_alpha);
             float alpha = color_alpha.a;
 
-            Color mr = pbr->sampleMetalRoughness(surface.uv);
+            Color mr = pbr->sampleMetalRoughness(surface);
             float metalness = mr.r;
             float roughness = mr.g;
-            float occlusion = pbr->sampleOcclusion(surface.uv);
+            float occlusion = pbr->sampleOcclusion(surface);
 
             Color albedo = color * (1.0f - metalness);
             Color F0 = glm::mix(Color(0.04f), color, metalness);
@@ -41,7 +41,7 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
                     * F0
                     * glm::mix(0.08f, 0.42f, metalness)
                     * (1.0f - 0.45f * glm::clamp(roughness, 0.0f, 1.0f));
-                outgoing_radiance = ambient_diffuse + ambient_specular + pbr->sampleEmissive(surface.uv);
+                outgoing_radiance = ambient_diffuse + ambient_specular + pbr->sampleEmissive(surface);
                 const auto& preview_lights = scene.getPathLights().empty()
                     ? scene.getLights()
                     : scene.getPathLights();
@@ -72,8 +72,8 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
         }
 
         if(auto glass = std::dynamic_pointer_cast<SmoothGlassMaterial>(material)) {
-            glm::vec3 normal = computeGlobalNormal(surface, glass->sampleNormal(surface.uv));
-            Color color = glass->sampleBaseColor(surface.uv);
+            glm::vec3 normal = computeGlobalNormal(surface, glass->sampleNormal(surface));
+            Color color = glass->sampleBaseColor(surface);
             float surface_detail = glm::clamp(glass->surface_detail_strength, 0.0f, 1.0f);
             float eta =
                 surface.hit_direction == HitDirection::ENTERING ? 1.0f / glass->refractive_index :
@@ -129,8 +129,8 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
         }
 
         if(auto mirror = std::dynamic_pointer_cast<SmoothMirrorMaterial>(material)) {
-            glm::vec3 normal = computeGlobalNormal(surface, mirror->sampleNormal(surface.uv));
-            Color F0 = mirror->sampleBaseColor(surface.uv);
+            glm::vec3 normal = computeGlobalNormal(surface, mirror->sampleNormal(surface));
+            Color F0 = mirror->sampleBaseColor(surface);
             Color F = computeFresnelSchlick(normal, -ray.direction, F0);
             if(depth <= 0) return F * scene.getBackgroundColor();
 

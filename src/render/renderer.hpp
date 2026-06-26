@@ -44,6 +44,7 @@ struct PathRenderSettings {
     bool enable_russian_roulette = true;
     bool enable_path_regularization = false;
     bool enable_taa = true;
+    bool accumulate_samples = false;
     bool reset_requested = false;
 
     bool operator==(const PathRenderSettings& other) const = default;

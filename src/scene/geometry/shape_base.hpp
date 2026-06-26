@@ -15,6 +15,7 @@ struct SurfaceData {
     glm::vec3 tangent;
     glm::vec3 bitangent;
     glm::vec2 uv;
+    glm::vec2 uv1 = glm::vec2(0.0f);
 };
 
 struct AABB {
@@ -45,6 +46,17 @@ public:
         normal = glm::vec3(0.0f, 1.0f, 0.0f);
         uv = glm::vec2(0.0f);
         pdf = 0.0f;
+    }
+    virtual void samplePoint(
+        const glm::vec3& u,
+        glm::vec3& position,
+        glm::vec3& normal,
+        glm::vec2& uv,
+        glm::vec2& uv1,
+        float& pdf
+    ) const {
+        samplePoint(u, position, normal, uv, pdf);
+        uv1 = uv;
     }
     virtual void sampleDirection(
         const glm::vec3& u,

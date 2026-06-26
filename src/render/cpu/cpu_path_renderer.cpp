@@ -156,6 +156,7 @@ void CpuPathRenderer::render(
 
     PathRenderSettings comparable_settings = settings;
     comparable_settings.reset_requested = false;
+    comparable_settings.samples_per_frame = 1;
     bool settings_changed = context.settings_changed || !(comparable_settings == last_settings);
     bool reset_for_camera = context.camera_changed && settings.denoiser == PathDenoiserMode::Temporal;
     if(settings.reset_requested || context.scene_changed || settings_changed || reset_for_camera) {
@@ -193,7 +194,12 @@ void CpuPathRenderer::render(
     }
 
     next_sample_index += static_cast<uint64_t>(settings.samples_per_frame);
-    for(Color& color : current_color) {
+    const uint32_t new_accumulated_samples = glm::min<uint32_t>(
+        accumulated_samples + static_cast<uint32_t>(settings.samples_per_frame),
+        0xffffffffu
+    );
+    std::vector<Color> current_average = current_color;
+    for(Color& color : current_average) {
         color /= static_cast<float>(settings.samples_per_frame);
     }
 
@@ -202,21 +208,29 @@ void CpuPathRenderer::render(
     if(settings.denoiser == PathDenoiserMode::None) {
         #pragma omp parallel for schedule(static)
         for(int i = 0; i < static_cast<int>(pixel_count); ++i) {
-            pixels[i] = encodeColor(tonemap_aces(current_color[static_cast<std::size_t>(i)]));
+            const std::size_t idx = static_cast<std::size_t>(i);
+            Color color = current_average[idx];
+            if(settings.accumulate_samples) {
+                accumulation[idx] += current_color[idx];
+                color = accumulation[idx] / static_cast<float>(new_accumulated_samples);
+            }
+            pixels[i] = encodeColor(tonemap_aces(color));
         }
+        if(settings.accumulate_samples) accumulated_samples = new_accumulated_samples;
         previous_camera = camera;
         has_previous_camera = true;
         return;
     }
 
     if(settings.denoiser == PathDenoiserMode::Temporal) {
-        ++accumulated_samples;
         #pragma omp parallel for schedule(static)
         for(int i = 0; i < static_cast<int>(pixel_count); ++i) {
-            accumulation[static_cast<std::size_t>(i)] += current_color[static_cast<std::size_t>(i)];
-            Color average = accumulation[static_cast<std::size_t>(i)] / static_cast<float>(accumulated_samples);
+            const std::size_t idx = static_cast<std::size_t>(i);
+            accumulation[idx] += current_color[idx];
+            Color average = accumulation[idx] / static_cast<float>(new_accumulated_samples);
             pixels[i] = encodeColor(tonemap_aces(average));
         }
+        accumulated_samples = new_accumulated_samples;
         previous_camera = camera;
         has_previous_camera = true;
         return;
@@ -265,7 +279,7 @@ void CpuPathRenderer::render(
     }
 
     svgf_history.swap(svgf_current);
-    accumulated_samples = glm::min<uint32_t>(accumulated_samples + settings.samples_per_frame, 0xffffffffu);
+    accumulated_samples = new_accumulated_samples;
     previous_camera = camera;
     has_previous_camera = true;
 }

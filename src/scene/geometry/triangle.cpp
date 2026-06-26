@@ -25,6 +25,18 @@ void Triangle::samplePoint(
     glm::vec2& uv,
     float& pdf
 ) const {
+    glm::vec2 uv1;
+    samplePoint(u, position, normal, uv, uv1, pdf);
+}
+
+void Triangle::samplePoint(
+    const glm::vec3& u,
+    glm::vec3& position,
+    glm::vec3& normal,
+    glm::vec2& uv,
+    glm::vec2& uv1,
+    float& pdf
+) const {
     float su0 = glm::sqrt(glm::clamp(u.x, 0.0f, 1.0f));
     float w0 = 1.0f - su0;
     float w1 = su0 * (1.0f - glm::clamp(u.y, 0.0f, 1.0f));
@@ -32,6 +44,7 @@ void Triangle::samplePoint(
     position = w0 * v0.position + w1 * v1.position + w2 * v2.position;
     normal = glm::normalize(glm::cross(v1.position - v0.position, v2.position - v0.position));
     uv = w0 * v0.uv + w1 * v1.uv + w2 * v2.uv;
+    uv1 = w0 * v0.uv1 + w1 * v1.uv1 + w2 * v2.uv1;
     float area = surfaceArea();
     pdf = area > 0.0f ? 1.0f / area : 0.0f;
 }
@@ -57,6 +70,7 @@ bool Triangle::intersect(const Ray& ray, RayHit& hit) const {
     if(hit_distance <= epsilon) return false;
 
     hit.distance = hit_distance;
+    hit.object_distance = hit_distance;
     hit.surface_coords = glm::vec2(w1, w2);
     return true;
 }
@@ -71,6 +85,7 @@ SurfaceData Triangle::getSurfaceData(const Ray& ray, const RayHit& hit) const {
     surface.tangent = v0.tangent * w0 + v1.tangent * w1 + v2.tangent * w2;
     surface.bitangent = v0.bitangent * w0 + v1.bitangent * w1 + v2.bitangent * w2;
     surface.uv = v0.uv * w0 + v1.uv * w1 + v2.uv * w2;
+    surface.uv1 = v0.uv1 * w0 + v1.uv1 * w1 + v2.uv1 * w2;
     if(glm::dot(ray.direction, surface.normal) > 0.0f) {
         surface.normal *= -1.0f;
         surface.hit_direction = HitDirection::EXITING;

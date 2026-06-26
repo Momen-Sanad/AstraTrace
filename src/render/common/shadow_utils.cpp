@@ -21,13 +21,13 @@ Color computeShadow(const Scene& scene, Ray ray, float max_distance) {
 
             if(auto pbr = std::dynamic_pointer_cast<PBRMaterial>(material)) {
                 SurfaceData surface = object->getSurfaceData(ray, hit);
-                ColorA color_alpha = pbr->sampleBaseColor(surface.uv);
+                ColorA color_alpha = pbr->sampleBaseColor(surface);
                 shadow *= (1.0f - color_alpha.a);
             } else if(std::dynamic_pointer_cast<SmoothMirrorMaterial>(material)) {
                 shadow = Color(0.0f);
             } else if(auto glass = std::dynamic_pointer_cast<SmoothGlassMaterial>(material)) {
                 SurfaceData surface = object->getSurfaceData(ray, hit);
-                Color color = glass->sampleBaseColor(surface.uv);
+                Color color = glass->sampleBaseColor(surface);
                 shadow *= color;
             }
 

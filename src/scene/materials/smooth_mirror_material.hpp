@@ -8,12 +8,16 @@
 class SmoothMirrorBSDF final : public BSDF {
 public:
     glm::vec3 normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 base_normal = glm::vec3(0.0f, 1.0f, 0.0f);
     Color color = Color(1.0f);
 
     BSDFSample sample(const glm::vec3& u, const glm::vec3& view) const override {
         (void)u;
         BSDFSample result;
         result.direction = glm::reflect(-view, normal);
+        if(glm::dot(result.direction, base_normal) < 0.0f) {
+            result.direction = glm::reflect(-view, base_normal);
+        }
         result.throughput.specular = color;
         result.pdf = 0.0f;
         result.lobe = LobeType::Specular;
@@ -42,10 +46,17 @@ class SmoothMirrorMaterial : public Material {
 public:
     std::shared_ptr<Image<Color>> base_color = nullptr;
     std::shared_ptr<Image<Color>> normal = nullptr;
+    TextureMapping base_color_mapping;
+    TextureMapping normal_mapping;
     Color tint = Color(1.0f);
 
     inline Color sampleBaseColor(glm::vec2 uv) const {
         if(base_color) return tint * sampleImage(base_color, uv);
+        return tint;
+    }
+
+    inline Color sampleBaseColor(const SurfaceData& surface) const {
+        if(base_color) return tint * sampleMappedImage(base_color, base_color_mapping, surface);
         return tint;
     }
 
@@ -54,15 +65,21 @@ public:
         return Color(0.5f, 0.5f, 1.0f);
     }
 
+    inline Color sampleNormal(const SurfaceData& surface) const {
+        if(normal) return sampleMappedImage(normal, normal_mapping, surface);
+        return Color(0.5f, 0.5f, 1.0f);
+    }
+
     std::unique_ptr<BSDF> sampleBSDF(const SurfaceData& surface) const override {
         auto bsdf = std::make_unique<SmoothMirrorBSDF>();
-        Color local = 2.0f * sampleNormal(surface.uv) - 1.0f;
+        Color local = 2.0f * sampleNormal(surface) - 1.0f;
         bsdf->normal = glm::normalize(glm::vec3(
             local.x * surface.tangent +
             local.y * surface.bitangent +
             local.z * surface.normal
         ));
-        bsdf->color = sampleBaseColor(surface.uv);
+        bsdf->base_normal = surface.normal;
+        bsdf->color = sampleBaseColor(surface);
         return bsdf;
     }
 };

@@ -91,8 +91,8 @@ Backends:
 Export options:
 - `--export <out.png>`
 - `--width <pixels>` / `--height <pixels>`
-- `--samples <spp>` and `--bounces <count>` for `cpu-path`
-- `--denoiser temporal|svgf`
+- `--samples <spp>` and `--bounces <count>` for `cpu-path`; `none` and `temporal` exports accumulate the requested total samples
+- `--denoiser none|temporal|svgf`; `svgf` is a preview-style export path
 - `--sampler random|halton|sobol`
 - `--light-sampler uniform|power|contribution`
 

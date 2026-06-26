@@ -8,6 +8,7 @@ struct Vertex {
     glm::vec3 tangent;
     glm::vec3 bitangent;
     glm::vec2 uv;
+    glm::vec2 uv1 = glm::vec2(0.0f);
 };
 
 class Triangle : public Shape {
@@ -25,6 +26,14 @@ public:
         glm::vec3& position,
         glm::vec3& normal,
         glm::vec2& uv,
+        float& pdf
+    ) const override;
+    void samplePoint(
+        const glm::vec3& u,
+        glm::vec3& position,
+        glm::vec3& normal,
+        glm::vec2& uv,
+        glm::vec2& uv1,
         float& pdf
     ) const override;
 

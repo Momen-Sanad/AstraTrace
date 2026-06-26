@@ -42,14 +42,27 @@ float maxChannel(const Color& color) {
 
 bool SceneObject::intersect(const Ray& ray, RayHit& hit) const {
     if(is_identity_transform) {
-        return shape->intersect(ray, hit);
+        if(!shape->intersect(ray, hit)) return false;
+        hit.object_distance = hit.distance;
+        return true;
     }
 
     Ray transformed_ray = {
         .origin = transform_inverse * glm::vec4(ray.origin, 1.0f),
         .direction = transform_inverse * glm::vec4(ray.direction, 0.0f)
     };
-    return shape->intersect(transformed_ray, hit);
+    RayHit local_hit = hit;
+    if(!shape->intersect(transformed_ray, local_hit)) return false;
+
+    glm::vec3 local_point = transformed_ray.origin + transformed_ray.direction * local_hit.distance;
+    glm::vec3 world_point = glm::vec3(transform * glm::vec4(local_point, 1.0f));
+    glm::vec3 world_delta = world_point - ray.origin;
+    float direction_length2 = glm::max(glm::dot(ray.direction, ray.direction), 1e-8f);
+
+    hit = local_hit;
+    hit.object_distance = local_hit.distance;
+    hit.distance = glm::dot(world_delta, ray.direction) / direction_length2;
+    return hit.distance > 0.0f;
 }
 
 bool SceneObject::mayIntersect(const Ray& ray, float max_distance) const {
@@ -66,10 +79,14 @@ SurfaceData SceneObject::getSurfaceData(const Ray& ray, const RayHit& hit) const
         .direction = transform_inverse * glm::vec4(ray.direction, 0.0f)
     };
 
-    SurfaceData surface = shape->getSurfaceData(transformed_ray, hit);
-    surface.normal = glm::normalize(glm::transpose(transform_inverse) * glm::vec4(surface.normal, 0.0f));
-    surface.tangent = glm::normalize(transform * glm::vec4(surface.tangent, 0.0f));
-    surface.bitangent = glm::normalize(transform * glm::vec4(surface.bitangent, 0.0f));
+    RayHit local_hit = hit;
+    local_hit.distance = hit.object_distance;
+    SurfaceData surface = shape->getSurfaceData(transformed_ray, local_hit);
+    glm::mat3 normal_transform = glm::transpose(glm::mat3(transform_inverse));
+    glm::mat3 tangent_transform = glm::mat3(transform);
+    surface.normal = glm::normalize(normal_transform * surface.normal);
+    surface.tangent = glm::normalize(tangent_transform * surface.tangent);
+    surface.bitangent = glm::normalize(tangent_transform * surface.bitangent);
     return surface;
 }
 
@@ -82,8 +99,11 @@ glm::vec3 SceneObject::getGeometricNormal(const Ray& ray, const RayHit& hit) con
         .origin = transform_inverse * glm::vec4(ray.origin, 1.0f),
         .direction = transform_inverse * glm::vec4(ray.direction, 0.0f)
     };
-    glm::vec3 normal = shape->geometricNormal(transformed_ray, hit);
-    normal = glm::normalize(glm::transpose(transform_inverse) * glm::vec4(normal, 0.0f));
+    RayHit local_hit = hit;
+    local_hit.distance = hit.object_distance;
+    glm::vec3 normal = shape->geometricNormal(transformed_ray, local_hit);
+    glm::mat3 normal_transform = glm::transpose(glm::mat3(transform_inverse));
+    normal = glm::normalize(normal_transform * normal);
     if(glm::dot(ray.direction, normal) > 0.0f) normal *= -1.0f;
     return normal;
 }
@@ -99,16 +119,24 @@ void SceneObject::samplePoint(
     glm::vec2& uv,
     float& pdf
 ) const {
-    shape->samplePoint(u, point, normal, uv, pdf);
+    glm::vec2 uv1;
+    samplePoint(u, point, normal, uv, uv1, pdf);
+}
+
+void SceneObject::samplePoint(
+    const glm::vec3& u,
+    glm::vec3& point,
+    glm::vec3& normal,
+    glm::vec2& uv,
+    glm::vec2& uv1,
+    float& pdf
+) const {
+    shape->samplePoint(u, point, normal, uv, uv1, pdf);
     if(is_identity_transform) return;
 
     point = glm::vec3(transform * glm::vec4(point, 1.0f));
-    normal = glm::normalize(glm::transpose(transform_inverse) * glm::vec4(normal, 0.0f));
-
-    float scale_x = glm::length(glm::vec3(transform[0]));
-    float scale_y = glm::length(glm::vec3(transform[1]));
-    float scale_z = glm::length(glm::vec3(transform[2]));
-    float area_scale = glm::max(1e-6f, (scale_x * scale_y + scale_x * scale_z + scale_y * scale_z) / 3.0f);
+    glm::mat3 normal_transform = glm::transpose(glm::mat3(transform_inverse));
+    normal = glm::normalize(normal_transform * normal);
     pdf /= area_scale;
 }
 
@@ -120,14 +148,22 @@ void SceneObject::sampleDirection(
     glm::vec2& uv,
     float& pdf
 ) const {
-    if(is_identity_transform) {
-        shape->sampleDirection(u, point, direction, distance, uv, pdf);
-        return;
-    }
+    glm::vec2 uv1;
+    sampleDirectionDetailed(u, point, direction, distance, uv, uv1, pdf);
+}
 
+void SceneObject::sampleDirectionDetailed(
+    const glm::vec3& u,
+    const glm::vec3& point,
+    glm::vec3& direction,
+    float& distance,
+    glm::vec2& uv,
+    glm::vec2& uv1,
+    float& pdf
+) const {
     glm::vec3 sampled_point;
     glm::vec3 sampled_normal;
-    samplePoint(u, sampled_point, sampled_normal, uv, pdf);
+    samplePoint(u, sampled_point, sampled_normal, uv, uv1, pdf);
     direction = sampled_point - point;
     float distance_squared = glm::dot(direction, direction);
     if(distance_squared <= 1e-8f || pdf <= 0.0f) {
@@ -144,7 +180,7 @@ void SceneObject::sampleDirection(
 float SceneObject::computePDF(const Ray& ray, const RayHit& hit) const {
     if(is_identity_transform) return shape->computePDF(ray, hit);
 
-    float area = shape->surfaceArea();
+    float area = shape->surfaceArea() * area_scale;
     if(area <= 0.0f) return 0.0f;
     glm::vec3 normal = getGeometricNormal(ray, hit);
     float cos_light = glm::abs(glm::dot(normal, -ray.direction));
@@ -156,12 +192,13 @@ LightEvaluation SceneObject::evaluate(glm::vec3 point) const {
     glm::vec3 direction;
     float distance = 0.0f;
     glm::vec2 uv;
+    glm::vec2 uv1;
     float sample_pdf = 0.0f;
-    sampleDirection(glm::vec3(0.5f), point, direction, distance, uv, sample_pdf);
+    sampleDirectionDetailed(glm::vec3(0.5f), point, direction, distance, uv, uv1, sample_pdf);
     return {
         .light_vector = direction,
         .distance = distance,
-        .radiance = sample_pdf > 0.0f ? material->sampleEmissive(uv) / sample_pdf : Color(0.0f)
+        .radiance = sample_pdf > 0.0f ? material->sampleEmissive(uv, uv1) / sample_pdf : Color(0.0f)
     };
 }
 
@@ -169,12 +206,13 @@ LightSample SceneObject::sample(glm::vec3 point, const glm::vec3& u) const {
     glm::vec3 direction;
     float distance = 0.0f;
     glm::vec2 uv;
+    glm::vec2 uv1;
     float sample_pdf = 0.0f;
-    sampleDirection(u, point, direction, distance, uv, sample_pdf);
+    sampleDirectionDetailed(u, point, direction, distance, uv, uv1, sample_pdf);
     return {
         .light_vector = direction,
         .distance = distance,
-        .radiance = sample_pdf > 0.0f ? material->sampleEmissive(uv) : Color(0.0f),
+        .radiance = sample_pdf > 0.0f ? material->sampleEmissive(uv, uv1) : Color(0.0f),
         .pdf = sample_pdf,
         .delta = false
     };
@@ -186,7 +224,7 @@ float SceneObject::pdf(const Ray& ray, const RayHit& hit) const {
 
 float SceneObject::power() const {
     if(!material || !shape) return 0.0f;
-    return maxChannel(material->getAverageEmissivePower()) * shape->surfaceArea() * 3.1415926535f;
+    return maxChannel(material->getAverageEmissivePower()) * shape->surfaceArea() * area_scale * 3.1415926535f;
 }
 
 float SceneObject::estimatePowerAt(glm::vec3 point, glm::vec3 normal) const {
@@ -208,11 +246,17 @@ bool SceneObject::update() {
     if(is_identity_transform) {
         transform = glm::mat4(1.0f);
         transform_inverse = glm::mat4(1.0f);
+        area_scale = 1.0f;
     } else {
         transform = glm::translate(glm::mat4(1.0f), position)
             * glm::mat4_cast(rotation)
             * glm::scale(glm::mat4(1.0f), scale);
         transform_inverse = glm::inverse(transform);
+
+        float scale_x = glm::length(glm::vec3(transform[0]));
+        float scale_y = glm::length(glm::vec3(transform[1]));
+        float scale_z = glm::length(glm::vec3(transform[2]));
+        area_scale = glm::max(1e-6f, (scale_x * scale_y + scale_x * scale_z + scale_y * scale_z) / 3.0f);
     }
 
     AABB local_bounds = shape->getBounds();

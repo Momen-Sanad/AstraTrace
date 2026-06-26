@@ -166,6 +166,11 @@ public:
     std::shared_ptr<Image<Color>> normal = nullptr;
     std::shared_ptr<Image<float>> occlusion = nullptr;
     std::shared_ptr<Image<Color>> metal_roughness = nullptr;
+    TextureMapping base_color_mapping;
+    TextureMapping emissive_mapping;
+    TextureMapping normal_mapping;
+    TextureMapping occlusion_mapping;
+    TextureMapping metal_roughness_mapping;
     ColorA tint = ColorA(1.0f);
     Color emissive_power = Color(0.0f);
     bool contributes_emission_to_lighting = true;
@@ -178,8 +183,23 @@ public:
         return tint;
     }
 
+    inline ColorA sampleBaseColor(const SurfaceData& surface) const {
+        if(base_color) return tint * sampleMappedImage(base_color, base_color_mapping, surface);
+        return tint;
+    }
+
     inline Color sampleEmissive(glm::vec2 uv) const {
         if(emissive) return emissive_power * sampleImage(emissive, uv);
+        return emissive_power;
+    }
+
+    inline Color sampleEmissive(glm::vec2 uv0, glm::vec2 uv1) const override {
+        if(emissive) return emissive_power * sampleMappedImage(emissive, emissive_mapping, uv0, uv1);
+        return emissive_power;
+    }
+
+    inline Color sampleEmissive(const SurfaceData& surface) const {
+        if(emissive) return emissive_power * sampleMappedImage(emissive, emissive_mapping, surface);
         return emissive_power;
     }
 
@@ -188,8 +208,18 @@ public:
         return Color(0.5f, 0.5f, 1.0f);
     }
 
+    inline Color sampleNormal(const SurfaceData& surface) const {
+        if(normal) return sampleMappedImage(normal, normal_mapping, surface);
+        return Color(0.5f, 0.5f, 1.0f);
+    }
+
     inline float sampleOcclusion(glm::vec2 uv) const {
         if(occlusion) return sampleImage(occlusion, uv);
+        return 1.0f;
+    }
+
+    inline float sampleOcclusion(const SurfaceData& surface) const {
+        if(occlusion) return sampleMappedImage(occlusion, occlusion_mapping, surface);
         return 1.0f;
     }
 
@@ -198,17 +228,22 @@ public:
         return Color(0.0f, 1.0f, 0.0f);
     }
 
+    inline Color sampleMetalRoughness(const SurfaceData& surface) const {
+        if(metal_roughness) return sampleMappedImage(metal_roughness, metal_roughness_mapping, surface);
+        return Color(0.0f, 1.0f, 0.0f);
+    }
+
     std::unique_ptr<BSDF> sampleBSDF(const SurfaceData& surface) const override {
         auto brdf = std::make_unique<PBRBRDF>();
-        Color local = 2.0f * sampleNormal(surface.uv) - 1.0f;
+        Color local = 2.0f * sampleNormal(surface) - 1.0f;
         brdf->normal = glm::normalize(glm::vec3(
             local.x * surface.tangent +
             local.y * surface.bitangent +
             local.z * surface.normal
         ));
 
-        ColorA base = sampleBaseColor(surface.uv);
-        Color mr = sampleMetalRoughness(surface.uv);
+        ColorA base = sampleBaseColor(surface);
+        Color mr = sampleMetalRoughness(surface);
         float metalness = glm::clamp(mr.r, 0.0f, 1.0f);
         float roughness = glm::clamp(mr.g, 0.0f, 1.0f);
         Color base_rgb(base);
@@ -216,7 +251,7 @@ public:
         brdf->specular_color = glm::mix(Color(0.04f), base_rgb, metalness);
         brdf->alpha = glm::max(roughness * roughness, 1e-4f);
         brdf->coverage = glm::clamp(base.a, 0.0f, 1.0f);
-        brdf->emission = sampleEmissive(surface.uv);
+        brdf->emission = sampleEmissive(surface);
         return brdf;
     }
 

@@ -43,6 +43,14 @@ public:
         glm::vec2& uv,
         float& pdf
     ) const;
+    void samplePoint(
+        const glm::vec3& u,
+        glm::vec3& point,
+        glm::vec3& normal,
+        glm::vec2& uv,
+        glm::vec2& uv1,
+        float& pdf
+    ) const;
     void sampleDirection(
         const glm::vec3& u,
         const glm::vec3& point,
@@ -64,6 +72,16 @@ public:
     bool update();
 
 private:
+    void sampleDirectionDetailed(
+        const glm::vec3& u,
+        const glm::vec3& point,
+        glm::vec3& direction,
+        float& distance,
+        glm::vec2& uv,
+        glm::vec2& uv1,
+        float& pdf
+    ) const;
+
     ObjectID id = 0;
     std::shared_ptr<Shape> shape;
     std::shared_ptr<Material> material;
@@ -75,6 +93,7 @@ private:
     AABB world_bounds;
     glm::vec3 bounds_center = glm::vec3(0.0f);
     float bounds_radius = 0.0f;
+    float area_scale = 1.0f;
     bool is_identity_transform = true;
     bool is_dirty = true;
 };

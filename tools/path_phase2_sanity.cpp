@@ -1,8 +1,11 @@
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 
 #include <glm/glm.hpp>
@@ -128,6 +131,94 @@ void checkRendererHistory() {
     context = render::RenderFrameContext{.settings_changed = true};
     renderer.render(scene, camera, image, context, settings);
     require(!renderer.getStatus().empty(), "renderer status was empty after temporal render");
+}
+
+void checkPathNoOpExportAccumulation() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.2f));
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+
+    Image<Color8> image(2, 2);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.accumulate_samples = true;
+    settings.samples_per_frame = 64;
+    renderer.render(scene, camera, image, render::RenderFrameContext{.scene_changed = true}, settings);
+
+    settings.samples_per_frame = 1;
+    renderer.render(scene, camera, image, render::RenderFrameContext{.frame_index = 1}, settings);
+    require(
+        renderer.getStatus().find("65 accumulated") != std::string::npos,
+        "NoOp export accumulation did not count all sample batches"
+    );
+}
+
+void checkTransformedSceneObject() {
+    Scene scene;
+    auto material = std::make_shared<PBRMaterial>();
+    material->emissive_power = Color(1.0f);
+    auto object = scene.createObject(std::make_shared<Sphere>(glm::vec3(0.0f), 1.0f), material);
+    object->setPosition(glm::vec3(0.0f, 0.0f, -5.0f));
+    object->setScale(glm::vec3(2.0f));
+    scene.update();
+
+    Ray ray{glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+    RayHit hit;
+    auto hit_object = scene.findClosestHit(ray, hit);
+    require(hit_object == object, "scaled transformed sphere was not hit");
+    require(glm::abs(hit.distance - 3.0f) < 1e-4f, "scaled transformed sphere hit distance was wrong");
+
+    SurfaceData surface = object->getSurfaceData(ray, hit);
+    require(glm::abs(glm::dot(surface.normal, glm::vec3(0.0f, 0.0f, 1.0f))) > 0.99f, "transformed sphere surface normal was wrong");
+
+    const float expected_pdf = 9.0f / (16.0f * glm::pi<float>());
+    require(glm::abs(object->pdf(ray, hit) - expected_pdf) < 1e-4f, "transformed emissive PDF ignored world area scale");
+    require(object->power() > 4.0f * glm::pi<float>() * glm::pi<float>(), "transformed emissive power ignored area scale");
+}
+
+void checkBvhTraversalEquivalence() {
+    Scene scene;
+    auto material = std::make_shared<PBRMaterial>();
+    for(int i = 0; i < 9; ++i) {
+        float x = static_cast<float>((i % 3) - 1) * 1.5f;
+        float y = static_cast<float>((i / 3) - 1) * 1.5f;
+        scene.createObject(std::make_shared<Sphere>(glm::vec3(x, y, -6.0f), 0.45f), material);
+    }
+    scene.update();
+    require(scene.getStats().top_level_bvh_node_count > 0, "BVH equivalence scene did not build TLAS");
+
+    for(int y = -3; y <= 3; ++y) {
+        for(int x = -3; x <= 3; ++x) {
+            Ray ray{
+                glm::vec3(0.0f),
+                glm::normalize(glm::vec3(0.12f * x, 0.12f * y, -1.0f))
+            };
+
+            RayHit bvh_hit;
+            auto bvh_object = scene.findClosestHit(ray, bvh_hit);
+
+            float linear_distance = std::numeric_limits<float>::max();
+            std::shared_ptr<SceneObject> linear_object;
+            RayHit linear_hit;
+            for(const auto& object : scene.getObjects()) {
+                RayHit object_hit;
+                object_hit.distance = linear_distance;
+                if(object->intersect(ray, object_hit) && object_hit.distance < linear_distance) {
+                    linear_distance = object_hit.distance;
+                    linear_hit = object_hit;
+                    linear_object = object;
+                }
+            }
+
+            require(bvh_object == linear_object, "BVH closest-hit object differed from linear traversal");
+            if(bvh_object) {
+                require(glm::abs(bvh_hit.distance - linear_hit.distance) < 1e-4f, "BVH closest-hit distance differed from linear traversal");
+            }
+        }
+    }
 }
 
 void checkMaterialShowcase() {
@@ -412,6 +503,154 @@ void checkGltfTransmissionMapping() {
         rough_volume_result.warning.find("KHR_materials_volume") != std::string::npos,
         "rough volume transmission preview did not report a volume warning"
     );
+}
+
+void writeUvTransformScene(const std::filesystem::path& gltf_path) {
+    std::filesystem::create_directories(gltf_path.parent_path());
+
+    Image<Color8> albedo(2, 2);
+    albedo.getPixels()[0] = Color8(255, 0, 0, 255);
+    albedo.getPixels()[1] = Color8(0, 255, 0, 255);
+    albedo.getPixels()[2] = Color8(0, 0, 255, 255);
+    albedo.getPixels()[3] = Color8(255, 255, 255, 255);
+    std::string png_error;
+    require(savePng(albedo, gltf_path.parent_path() / "uv_transform_albedo.png", png_error), "failed to create UV transform texture");
+
+    const std::filesystem::path bin_path = gltf_path.parent_path() / "uv_transform.bin";
+    const float data[] = {
+        -1.0f, -1.0f, -3.0f,  1.0f, -1.0f, -3.0f,  0.0f,  1.0f, -3.0f,
+         0.0f,  0.0f,        0.0f,  0.0f,        0.0f,  0.0f,
+         0.0f,  0.0f,        0.5f,  0.0f,        0.0f,  0.5f
+    };
+    {
+        std::ofstream bin(bin_path, std::ios::binary);
+        require(static_cast<bool>(bin), "failed to create UV transform buffer");
+        bin.write(reinterpret_cast<const char*>(data), sizeof(data));
+    }
+
+    std::ofstream gltf(gltf_path);
+    require(static_cast<bool>(gltf), "failed to create UV transform glTF");
+    gltf << R"({
+  "asset": {"version": "2.0"},
+  "extensionsUsed": ["KHR_texture_transform"],
+  "buffers": [{"uri": "uv_transform.bin", "byteLength": 84}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 24},
+    {"buffer": 0, "byteOffset": 60, "byteLength": 24}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-1.0, -1.0, -3.0], "max": [1.0, 1.0, -3.0]},
+    {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"},
+    {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"}
+  ],
+  "images": [{"uri": "uv_transform_albedo.png", "mimeType": "image/png"}],
+  "textures": [{"source": 0}],
+  "materials": [{
+    "pbrMetallicRoughness": {
+      "baseColorTexture": {
+        "index": 0,
+        "texCoord": 1,
+        "extensions": {"KHR_texture_transform": {"offset": [0.25, 0.0], "scale": [1.0, 1.0]}}
+      },
+      "metallicFactor": 0.0,
+      "roughnessFactor": 1.0
+    }
+  }],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_1": 2}, "material": 0}]}],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+}
+
+void checkGltfUvTextureTransform() {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "astratrace_phase2_uv_transform" / "uv_transform.gltf";
+    writeUvTransformScene(path);
+
+    Scene scene;
+    Camera camera;
+    camera.setHalfSize(glm::radians(90.0f), 1.0f);
+    GltfSceneLoadResult result = io::gltf::loadSceneFromGLTF(path.string(), scene, camera, 1.0f);
+    require(result.success, "UV transform glTF failed to load");
+    require(!scene.getObjects().empty(), "UV transform scene imported no objects");
+    auto pbr = std::dynamic_pointer_cast<PBRMaterial>(scene.getObjects()[0]->getMaterial());
+    require(static_cast<bool>(pbr), "UV transform material should be PBR");
+    require(pbr->base_color_mapping.texcoord == 1, "base-color texture did not preserve TEXCOORD_1");
+    require(glm::abs(pbr->base_color_mapping.offset.x - 0.25f) < 1e-6f, "base-color texture transform offset was not imported");
+
+    SurfaceData surface{};
+    surface.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+    surface.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+    surface.bitangent = glm::vec3(0.0f, 1.0f, 0.0f);
+    surface.uv = glm::vec2(0.0f);
+    surface.uv1 = glm::vec2(0.0f);
+    ColorA a = pbr->sampleBaseColor(surface);
+    surface.uv1 = glm::vec2(0.5f, 0.5f);
+    ColorA b = pbr->sampleBaseColor(surface);
+    require(glm::abs(a.r - b.r) > 0.05f || glm::abs(a.g - b.g) > 0.05f, "mapped texture sampling ignored UV1/transform");
+}
+
+void writeSparseAccessorScene(const std::filesystem::path& gltf_path) {
+    std::filesystem::create_directories(gltf_path.parent_path());
+    const std::filesystem::path bin_path = gltf_path.parent_path() / "sparse_positions.bin";
+    const uint8_t indices[] = {0, 1, 2, 0};
+    const float positions[] = {
+        -1.0f, -1.0f, -3.0f,
+         1.0f, -1.0f, -3.0f,
+         0.0f,  1.0f, -3.0f
+    };
+    {
+        std::ofstream bin(bin_path, std::ios::binary);
+        require(static_cast<bool>(bin), "failed to create sparse accessor buffer");
+        bin.write(reinterpret_cast<const char*>(indices), sizeof(indices));
+        bin.write(reinterpret_cast<const char*>(positions), sizeof(positions));
+    }
+
+    std::ofstream gltf(gltf_path);
+    require(static_cast<bool>(gltf), "failed to create sparse accessor glTF");
+    gltf << R"({
+  "asset": {"version": "2.0"},
+  "buffers": [{"uri": "sparse_positions.bin", "byteLength": 40}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 3},
+    {"buffer": 0, "byteOffset": 4, "byteLength": 36}
+  ],
+  "accessors": [{
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "sparse": {
+      "count": 3,
+      "indices": {"bufferView": 0, "componentType": 5121},
+      "values": {"bufferView": 1}
+    },
+    "min": [-1.0, -1.0, -3.0],
+    "max": [1.0, 1.0, -3.0]
+  }],
+  "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+}
+
+void checkGltfSparseAccessor() {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "astratrace_phase2_sparse" / "sparse.gltf";
+    writeSparseAccessorScene(path);
+
+    Scene scene;
+    Camera camera;
+    camera.setHalfSize(glm::radians(90.0f), 1.0f);
+    GltfSceneLoadResult result = io::gltf::loadSceneFromGLTF(path.string(), scene, camera, 1.0f);
+    require(result.success, "sparse accessor glTF failed to load");
+    require(!scene.getObjects().empty(), "sparse accessor scene imported no objects");
+    scene.update();
+    AABB bounds = scene.getObjects()[0]->getBounds();
+    require(bounds.min.x < -0.9f && bounds.max.x > 0.9f, "sparse accessor positions were not applied to bounds");
 }
 
 void writeIridescenceScene(const std::filesystem::path& gltf_path) {
@@ -806,8 +1045,13 @@ int main() {
         checkShapeSampling();
         checkBSDF();
         checkRendererHistory();
+        checkPathNoOpExportAccumulation();
+        checkTransformedSceneObject();
+        checkBvhTraversalEquivalence();
         checkMaterialShowcase();
         checkGltfTransmissionMapping();
+        checkGltfUvTextureTransform();
+        checkGltfSparseAccessor();
         checkGltfIridescenceFallback();
         checkGltfGuideTextureFallback();
         checkPngExportUtility();

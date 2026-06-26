@@ -83,9 +83,11 @@ target_link_libraries(astratrace_scene PUBLIC
 add_library(astratrace_io_gltf STATIC
     src/io/gltf/gltf_loader.cpp
     src/io/gltf/gltf_parser.cpp
+    src/io/gltf/gltf_accessors.cpp
+    src/io/gltf/gltf_textures.cpp
     src/io/gltf/gltf_scene_builder.cpp
     src/io/gltf/gltf_material_converter.cpp
-    src/io/gltf/gltf_texture_cache.cpp
+    src/io/gltf/gltf_mesh_builder.cpp
 )
 target_include_directories(astratrace_io_gltf PUBLIC
     ${ASTRATRACE_PUBLIC_INCLUDES}

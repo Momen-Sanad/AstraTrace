@@ -1,3 +1,9 @@
+#define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_STB_IMAGE_WRITE
+#define TINYGLTF_NO_INCLUDE_JSON
+
+#include <nlohmann/json.hpp>
+
 #include "io/gltf/gltf_parser.hpp"
 
 #include <algorithm>

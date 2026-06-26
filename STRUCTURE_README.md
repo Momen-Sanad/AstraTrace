@@ -93,15 +93,16 @@ This file documents the role of each source file in the current modular layout.
 ## IO Layer (`src/io/gltf`)
 
 - `src/io/gltf/gltf_loader.hpp`: public glTF scene-load API (`io::gltf::loadSceneFromGLTF`).
-- `src/io/gltf/gltf_loader.cpp`: main glTF load pipeline implementation, including conservative smooth-glass transmission mapping and preview iridescence fallback.
+- `src/io/gltf/gltf_loader.cpp`: small orchestration layer that parses a file and delegates scene construction.
 - `src/io/gltf/gltf_parser.hpp`: glTF parse abstraction declaration.
 - `src/io/gltf/gltf_parser.cpp`: tinygltf file parsing implementation.
+- `src/io/gltf/gltf_accessors.hpp/.cpp`: dense and sparse accessor decoding helpers.
+- `src/io/gltf/gltf_textures.hpp/.cpp`: image conversion, texture metadata, and `KHR_texture_transform` helpers.
+- `src/io/gltf/gltf_mesh_builder.hpp/.cpp`: primitive-to-`TriangleMesh` import, UV channels, and tangent generation.
 - `src/io/gltf/gltf_scene_builder.hpp`: scene-build abstraction declaration.
-- `src/io/gltf/gltf_scene_builder.cpp`: scene-build placeholder module.
+- `src/io/gltf/gltf_scene_builder.cpp`: node traversal, cameras, lights, fallback preview lighting, and scene object creation.
 - `src/io/gltf/gltf_material_converter.hpp`: material conversion abstraction declaration.
-- `src/io/gltf/gltf_material_converter.cpp`: material conversion placeholder module.
-- `src/io/gltf/gltf_texture_cache.hpp`: texture cache abstraction declaration.
-- `src/io/gltf/gltf_texture_cache.cpp`: texture cache placeholder module.
+- `src/io/gltf/gltf_material_converter.cpp`: PBR, smooth-glass transmission preview, iridescence preview, and material warnings.
 
 ## Render Layer (`src/render`)
 

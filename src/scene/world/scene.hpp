@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <vector>
 #include "scene/world/scene_object.hpp"
+#include "scene/world/environment.hpp"
 #include "scene/lights/lights.hpp"
 
 struct SceneStats {
@@ -18,7 +19,9 @@ struct SceneStats {
     std::size_t top_level_bvh_leaf_count = 0;
     int top_level_bvh_max_depth = 0;
     std::uint64_t top_level_bvh_rebuild_count = 0;
+    std::uint64_t top_level_bvh_refit_count = 0;
     double last_top_level_bvh_build_ms = 0.0;
+    double last_top_level_bvh_refit_ms = 0.0;
 };
 
 class Scene {
@@ -41,10 +44,16 @@ public:
     void addLight(const std::shared_ptr<Light>& light) { lights.push_back(light); }
     void clear();
 
-    void setBackgroundColor(Color color) { background_color = color; }
+    void setBackgroundColor(Color color);
+    void setEnvironmentImage(std::shared_ptr<Image<Color>> image, float strength = 1.0f);
     void setAmbient(Color color) { ambient = color; }
+    void setTopLevelBVHRefitEnabled(bool enabled) { top_level_bvh_refit_enabled = enabled; }
 
     Color getBackgroundColor() const { return background_color; }
+    Color evaluateEnvironment(glm::vec3 direction) const { return environment.evaluate(direction); }
+    EnvironmentSample sampleEnvironment(glm::vec3 u) const { return environment.sample(u); }
+    float environmentPdf(glm::vec3 direction) const { return environment.pdf(direction); }
+    bool hasImageEnvironment() const { return environment.hasImage(); }
     Color getAmbient() const { return ambient; }
     const std::vector<std::shared_ptr<Light>>& getLights() const { return lights; }
     const std::vector<std::shared_ptr<Light>>& getPathLights() const { return path_lights; }
@@ -73,6 +82,8 @@ private:
     };
 
     void rebuildTopLevelBVH();
+    void refitTopLevelBVH();
+    AABB refitTopLevelBVHNode(int node_index);
     int buildTopLevelBVHNode(int start, int count, int depth);
 
     ObjectID next_object_id = 0;
@@ -83,6 +94,8 @@ private:
     std::vector<TopLevelBVHNode> top_level_bvh_nodes;
     SceneStats stats;
     Color background_color = Color(0.0f);
+    EnvironmentMap environment;
     Color ambient = Color(0.0f);
     bool top_level_bvh_dirty = true;
+    bool top_level_bvh_refit_enabled = false;
 };

@@ -46,8 +46,20 @@ void Scene::clear() {
     top_level_bvh_nodes.clear();
     stats = {};
     background_color = Color(0.0f);
+    environment.setConstant(background_color);
     ambient = Color(0.0f);
     top_level_bvh_dirty = true;
+    top_level_bvh_refit_enabled = false;
+}
+
+void Scene::setBackgroundColor(Color color) {
+    background_color = glm::max(color, Color(0.0f));
+    environment.setConstant(background_color);
+}
+
+void Scene::setEnvironmentImage(std::shared_ptr<Image<Color>> image, float strength) {
+    environment.setImage(std::move(image), strength);
+    background_color = environment.averageRadiance();
 }
 
 void Scene::update() {
@@ -57,16 +69,22 @@ void Scene::update() {
         path_lights.push_back(light);
     }
 
-    bool rebuild_bvh = top_level_bvh_dirty;
+    bool object_bounds_changed = false;
     for(auto& object : objects) {
-        rebuild_bvh = object->update() || rebuild_bvh;
+        object_bounds_changed = object->update() || object_bounds_changed;
         if(object->isEmissive()) {
             path_lights.push_back(object);
         }
     }
 
-    if(rebuild_bvh) {
+    if(top_level_bvh_dirty || top_level_bvh_nodes.empty() || object_refs.size() != objects.size()) {
         rebuildTopLevelBVH();
+    } else if(object_bounds_changed) {
+        if(top_level_bvh_refit_enabled) {
+            refitTopLevelBVH();
+        } else {
+            rebuildTopLevelBVH();
+        }
     }
 }
 
@@ -239,7 +257,9 @@ void Scene::printStats() const {
     SDL_Log("\t- Top-Level BVH Leaves: %llu", static_cast<unsigned long long>(snapshot.top_level_bvh_leaf_count));
     SDL_Log("\t- Top-Level BVH Max Depth: %d", snapshot.top_level_bvh_max_depth);
     SDL_Log("\t- Top-Level BVH Rebuilds: %llu", static_cast<unsigned long long>(snapshot.top_level_bvh_rebuild_count));
+    SDL_Log("\t- Top-Level BVH Refits: %llu", static_cast<unsigned long long>(snapshot.top_level_bvh_refit_count));
     SDL_Log("\t- Last Top-Level BVH Build: %.3f ms", snapshot.last_top_level_bvh_build_ms);
+    SDL_Log("\t- Last Top-Level BVH Refit: %.3f ms", snapshot.last_top_level_bvh_refit_ms);
 }
 
 void Scene::rebuildTopLevelBVH() {
@@ -272,6 +292,47 @@ void Scene::rebuildTopLevelBVH() {
     const auto end_time = std::chrono::steady_clock::now();
     stats.last_top_level_bvh_build_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
     ++stats.top_level_bvh_rebuild_count;
+}
+
+void Scene::refitTopLevelBVH() {
+    if(top_level_bvh_nodes.empty() || object_refs.size() != objects.size()) {
+        rebuildTopLevelBVH();
+        return;
+    }
+
+    const auto start_time = std::chrono::steady_clock::now();
+    for(ObjectRef& ref : object_refs) {
+        if(ref.object_index >= objects.size()) {
+            rebuildTopLevelBVH();
+            return;
+        }
+        ref.bounds = objects[ref.object_index]->getBounds();
+        ref.centroid = 0.5f * (ref.bounds.min + ref.bounds.max);
+    }
+
+    refitTopLevelBVHNode(0);
+    const auto end_time = std::chrono::steady_clock::now();
+    stats.last_top_level_bvh_refit_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    ++stats.top_level_bvh_refit_count;
+}
+
+AABB Scene::refitTopLevelBVHNode(int node_index) {
+    TopLevelBVHNode& node = top_level_bvh_nodes[static_cast<std::size_t>(node_index)];
+    AABB bounds;
+    bounds.min = glm::vec3(std::numeric_limits<float>::max());
+    bounds.max = glm::vec3(std::numeric_limits<float>::lowest());
+
+    if(node.isLeaf()) {
+        for(int i = 0; i < node.count; ++i) {
+            expandBounds(bounds, object_refs[static_cast<std::size_t>(node.start + i)].bounds);
+        }
+    } else {
+        if(node.left >= 0) expandBounds(bounds, refitTopLevelBVHNode(node.left));
+        if(node.right >= 0) expandBounds(bounds, refitTopLevelBVHNode(node.right));
+    }
+
+    node.bounds = bounds;
+    return bounds;
 }
 
 int Scene::buildTopLevelBVHNode(int start, int count, int depth) {

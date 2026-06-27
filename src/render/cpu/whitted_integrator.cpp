@@ -88,7 +88,7 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
             glm::vec3 refracted = glm::refract(ray.direction, normal, eta);
 
             if(refracted == glm::vec3(0.0f)) {
-                if(depth <= 0) return scene.getBackgroundColor();
+                if(depth <= 0) return scene.evaluateEnvironment(reflected);
                 return traceRecursive(scene, {position + ray_epsilon * reflected, reflected}, depth - 1);
             }
 
@@ -96,7 +96,10 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
             if(eta > 1.0f) F = computeFresnelSchlick(-normal, refracted, F);
             else F = computeFresnelSchlick(normal, reflected, F);
 
-            if(depth <= 0) return (color * (1.0f - F) + F) * scene.getBackgroundColor();
+            if(depth <= 0) {
+                return F * scene.evaluateEnvironment(reflected) +
+                    color * (1.0f - F) * scene.evaluateEnvironment(refracted);
+            }
             Color reflection_result = traceRecursive(scene, {position + ray_epsilon * reflected, reflected}, depth - 1);
             Color refraction_result = traceRecursive(scene, {position + ray_epsilon * refracted, refracted}, depth - 1);
             float clear_weight = surface_detail > 0.0f
@@ -132,17 +135,17 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
             glm::vec3 normal = computeGlobalNormal(surface, mirror->sampleNormal(surface));
             Color F0 = mirror->sampleBaseColor(surface);
             Color F = computeFresnelSchlick(normal, -ray.direction, F0);
-            if(depth <= 0) return F * scene.getBackgroundColor();
 
             glm::vec3 reflected = glm::reflect(ray.direction, normal);
             if(glm::dot(reflected, surface.normal) < 0.0f) reflected = glm::reflect(reflected, surface.normal);
+            if(depth <= 0) return F * scene.evaluateEnvironment(reflected);
             return F * traceRecursive(scene, {position + ray_epsilon * reflected, reflected}, depth - 1);
         }
 
         return Color(0.0f);
     }
 
-    return scene.getBackgroundColor();
+    return scene.evaluateEnvironment(ray.direction);
 }
 
 } // namespace render::cpu

@@ -485,10 +485,17 @@ int FrameLoop::run() {
                 path_settings.sampler = static_cast<render::PathSamplerMode>(sampler_index);
             }
 
-            const char* denoiser_items[] = {"NoOp", "Temporal", "SVGF"};
+            const char* denoiser_items[] = {"NoOp", "Temporal", "SVGF", "OIDN"};
+            if(!render::isOIDNAvailable() && path_settings.denoiser == render::PathDenoiserMode::OIDN) {
+                path_settings.denoiser = render::PathDenoiserMode::Temporal;
+            }
             int denoiser_index = static_cast<int>(path_settings.denoiser);
-            if(ImGui::Combo("Denoiser", &denoiser_index, denoiser_items, IM_ARRAYSIZE(denoiser_items))) {
+            const int denoiser_count = render::isOIDNAvailable() ? IM_ARRAYSIZE(denoiser_items) : 3;
+            if(ImGui::Combo("Denoiser", &denoiser_index, denoiser_items, denoiser_count)) {
                 path_settings.denoiser = static_cast<render::PathDenoiserMode>(denoiser_index);
+            }
+            if(!render::isOIDNAvailable()) {
+                ImGui::TextUnformatted("OIDN not available in this build.");
             }
 
             const char* light_sampler_items[] = {"Uniform", "Power", "Contribution"};
@@ -516,6 +523,15 @@ int FrameLoop::run() {
             if(renderer) {
                 std::string render_status = renderer->getStatus();
                 if(!render_status.empty()) ImGui::TextUnformatted(render_status.c_str());
+                render::RenderProgress progress = renderer->getProgress();
+                if(progress.tile_count > 0) {
+                    ImGui::Text(
+                        "Progress: %u samples, %d tiles, %.2f ms/frame",
+                        progress.accumulated_samples,
+                        progress.tile_count,
+                        progress.last_frame_ms
+                    );
+                }
             }
         }
 

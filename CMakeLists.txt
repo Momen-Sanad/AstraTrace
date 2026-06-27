@@ -16,6 +16,8 @@ add_subdirectory(vendor/glm EXCLUDE_FROM_ALL)
 find_package(OpenMP)
 find_package(Python3 COMPONENTS Interpreter)
 
+option(ASTRATRACE_ENABLE_OIDN "Enable optional Intel Open Image Denoise support" OFF)
+
 add_library(mikktspace STATIC
     vendor/mikktspace/mikktspace.c
 )
@@ -67,6 +69,7 @@ add_library(astratrace_scene STATIC
     src/scene/geometry/sphere.cpp
     src/scene/geometry/obj_loader.cpp
     src/scene/world/scene_object.cpp
+    src/scene/world/environment.cpp
     src/scene/world/scene.cpp
     src/scene/world/scene_showcase.cpp
 )
@@ -127,6 +130,23 @@ target_link_libraries(astratrace_render_cpu PUBLIC
 if(OpenMP_CXX_FOUND)
     target_link_libraries(astratrace_render_cpu PUBLIC OpenMP::OpenMP_CXX)
 endif()
+set(ASTRATRACE_HAS_OIDN_VALUE 0)
+if(ASTRATRACE_ENABLE_OIDN)
+    find_package(OpenImageDenoise CONFIG QUIET)
+    set(ASTRATRACE_OIDN_TARGET "")
+    if(TARGET OpenImageDenoise)
+        set(ASTRATRACE_OIDN_TARGET OpenImageDenoise)
+    elseif(TARGET OpenImageDenoise::OpenImageDenoise)
+        set(ASTRATRACE_OIDN_TARGET OpenImageDenoise::OpenImageDenoise)
+    endif()
+    if(ASTRATRACE_OIDN_TARGET)
+        set(ASTRATRACE_HAS_OIDN_VALUE 1)
+        target_link_libraries(astratrace_render_cpu PUBLIC ${ASTRATRACE_OIDN_TARGET})
+    else()
+        message(WARNING "ASTRATRACE_ENABLE_OIDN=ON, but OpenImageDenoise was not found. Building without OIDN.")
+    endif()
+endif()
+target_compile_definitions(astratrace_render_cpu PUBLIC ASTRATRACE_HAS_OIDN=${ASTRATRACE_HAS_OIDN_VALUE})
 
 add_executable(astratrace_app
     src/app/main.cpp

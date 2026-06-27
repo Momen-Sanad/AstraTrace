@@ -41,6 +41,31 @@ std::shared_ptr<Image<Color>> loadImage<Color>(const char* filename, bool linear
     return img;
 }
 
+std::shared_ptr<Image<Color>> loadColorImageAnyDepth(const char* filename, bool linearize) {
+    stbi_set_flip_vertically_on_load(true);
+
+    int x = 0, y = 0, comp = 0;
+    if(stbi_is_hdr(filename)) {
+        float* data = stbi_loadf(filename, &x, &y, &comp, 3);
+        if(!data) return nullptr;
+
+        auto img = std::make_shared<Image<Color>>(x, y);
+        Color* pixels = img->getPixels();
+        for(int i = 0, s = x * y; i < s; ++i) {
+            pixels[i] = glm::max(Color(
+                data[i * 3 + 0],
+                data[i * 3 + 1],
+                data[i * 3 + 2]
+            ), Color(0.0f));
+        }
+
+        STBI_FREE(data);
+        return img;
+    }
+
+    return loadImage<Color>(filename, linearize);
+}
+
 template<>
 std::shared_ptr<Image<ColorA>> loadImage<ColorA>(const char* filename, bool linearize) {
     // We expect the first pixel in the loaded data to be the bottom-left pixel which is not the common standard in stored images.

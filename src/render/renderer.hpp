@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -31,6 +32,7 @@ enum class PathDenoiserMode {
     None,
     Temporal,
     SVGF,
+    OIDN,
 };
 
 struct PathRenderSettings {
@@ -56,6 +58,16 @@ struct RenderFrameContext {
     bool camera_changed = false;
     bool scene_changed = false;
     bool settings_changed = false;
+    const std::atomic_bool* cancel_requested = nullptr;
+};
+
+struct RenderProgress {
+    uint32_t accumulated_samples = 0;
+    int width = 0;
+    int height = 0;
+    int tile_count = 0;
+    double last_frame_ms = 0.0;
+    bool canceled = false;
 };
 
 class IRenderer {
@@ -75,7 +87,16 @@ public:
     }
     virtual void reset() {}
     virtual std::string getStatus() const { return {}; }
+    virtual RenderProgress getProgress() const { return {}; }
 };
+
+inline bool isOIDNAvailable() {
+#if defined(ASTRATRACE_HAS_OIDN) && ASTRATRACE_HAS_OIDN
+    return true;
+#else
+    return false;
+#endif
+}
 
 std::unique_ptr<IRenderer> createRenderer(RenderBackend backend);
 

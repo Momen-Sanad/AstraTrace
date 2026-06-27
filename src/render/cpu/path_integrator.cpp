@@ -208,11 +208,22 @@ Color directSkyLighting(
     Sampler& sampler,
     const PathRenderSettings& settings
 ) {
-    Color sky = scene.getBackgroundColor();
-    if(maxChannel(sky) <= 0.0f) return Color(0.0f);
+    glm::vec3 direction;
+    Color sky(0.0f);
+    float sky_pdf = 0.0f;
 
-    glm::vec3 direction = uniformHemisphere(sampler.next2(), normal);
-    constexpr float sky_pdf = 1.0f / (2.0f * glm::pi<float>());
+    if(scene.hasImageEnvironment()) {
+        EnvironmentSample sample = scene.sampleEnvironment(sampler.next3());
+        direction = sample.direction;
+        sky = sample.radiance;
+        sky_pdf = sample.pdf;
+    } else {
+        direction = uniformHemisphere(sampler.next2(), normal);
+        sky = scene.evaluateEnvironment(direction);
+        sky_pdf = 1.0f / (2.0f * glm::pi<float>());
+    }
+
+    if(maxChannel(sky) <= 0.0f || sky_pdf <= 0.0f) return Color(0.0f);
     DiffuseSpecular bsdf_value = bsdf.evaluate(direction, view);
     Color f = bsdf_value.sum();
     if(maxChannel(f) <= 0.0f) return Color(0.0f);
@@ -264,7 +275,6 @@ PathResult PathIntegrator::trace(
         RayHit hit;
         std::shared_ptr<SceneObject> object = scene.findClosestHit(ray, hit);
         if(!object) {
-            Color sky = scene.getBackgroundColor();
             float mis_weight = 1.0f;
             if(
                 settings.enable_nee &&
@@ -273,12 +283,18 @@ PathResult PathIntegrator::trace(
                 previous_lobe != LobeType::Specular &&
                 previous_lobe != LobeType::Transmission
             ) {
-                constexpr float sky_pdf = 1.0f / (2.0f * glm::pi<float>());
+                const float sky_pdf = scene.environmentPdf(ray.direction);
                 float bp = previous_bsdf_pdf * previous_bsdf_pdf;
                 float sp = sky_pdf * sky_pdf;
                 if(bp + sp > 0.0f) mis_weight = bp / (bp + sp);
             }
-            addContribution(result, throughput * sky * mis_weight, previous_lobe, bounce == 0, false);
+            addContribution(
+                result,
+                throughput * scene.evaluateEnvironment(ray.direction) * mis_weight,
+                previous_lobe,
+                bounce == 0,
+                false
+            );
             break;
         }
 

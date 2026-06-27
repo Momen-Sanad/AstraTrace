@@ -3,6 +3,8 @@
 #include <glm/glm.hpp>
 #include <memory>
 
+#include "core/color.hpp"
+
 template<typename T>
 class Image {
 public:
@@ -41,6 +43,8 @@ private:
 // For normal maps and other maps (metalness, roughness, etc), we shouldn't linearize the loaded pixels.
 template<typename T>
 std::shared_ptr<Image<T>> loadImage(const char* filename, bool linearize = true);
+
+std::shared_ptr<Image<Color>> loadColorImageAnyDepth(const char* filename, bool linearize = true);
 
 // Generate a square checkerboard image from the colors c1 & c2.
 // Each dimension will have "size" pixels, and it will have "repeats" tiles in each dimension.

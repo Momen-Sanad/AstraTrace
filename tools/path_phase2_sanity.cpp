@@ -1,4 +1,5 @@
 #include <cmath>
+#include <atomic>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -219,6 +220,188 @@ void checkBvhTraversalEquivalence() {
             }
         }
     }
+}
+
+void checkTlasRefitAfterMovement() {
+    Scene scene;
+    scene.setTopLevelBVHRefitEnabled(true);
+    auto material = std::make_shared<PBRMaterial>();
+    std::vector<std::shared_ptr<SceneObject>> objects;
+    for(int i = 0; i < 8; ++i) {
+        objects.push_back(scene.createObject(
+            std::make_shared<Sphere>(glm::vec3(0.0f), 0.35f),
+            material,
+            glm::vec3(static_cast<float>(i) - 3.5f, 0.0f, -5.0f)
+        ));
+    }
+    scene.update();
+    SceneStats before = scene.getStats();
+    require(before.top_level_bvh_node_count > 0, "TLAS refit scene did not build a BVH");
+
+    objects[0]->setPosition(glm::vec3(0.0f, 1.0f, -3.0f));
+    scene.update();
+    SceneStats after = scene.getStats();
+    require(after.top_level_bvh_refit_count > before.top_level_bvh_refit_count, "TLAS refit did not record a refit");
+    require(after.top_level_bvh_rebuild_count == before.top_level_bvh_rebuild_count, "TLAS refit unexpectedly rebuilt the tree");
+
+    Ray ray{glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+    RayHit bvh_hit;
+    auto bvh_object = scene.findClosestHit(ray, bvh_hit);
+
+    float linear_distance = std::numeric_limits<float>::max();
+    std::shared_ptr<SceneObject> linear_object;
+    RayHit linear_hit;
+    for(const auto& object : scene.getObjects()) {
+        RayHit object_hit;
+        object_hit.distance = linear_distance;
+        if(object->intersect(ray, object_hit) && object_hit.distance < linear_distance) {
+            linear_distance = object_hit.distance;
+            linear_hit = object_hit;
+            linear_object = object;
+        }
+    }
+    require(bvh_object == linear_object, "TLAS refit closest-hit object differed from linear traversal");
+    require(glm::abs(bvh_hit.distance - linear_hit.distance) < 1e-4f, "TLAS refit closest-hit distance differed from linear traversal");
+}
+
+void checkEnvironmentSampling() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.1f, 0.2f, 0.3f));
+    glm::vec3 test_direction = glm::normalize(glm::vec3(1.0f, 0.5f, -0.25f));
+    Color constant = scene.evaluateEnvironment(test_direction);
+    require(glm::length(constant - Color(0.1f, 0.2f, 0.3f)) < 1e-6f, "constant environment did not preserve background color");
+    const float full_sphere_pdf = 1.0f / (4.0f * std::acos(-1.0f));
+    require(glm::abs(scene.environmentPdf(test_direction) - full_sphere_pdf) < 1e-6f, "constant environment pdf mismatch");
+
+    auto image = std::make_shared<Image<Color>>(2, 2);
+    image->getPixels()[0] = Color(0.1f, 0.1f, 0.1f);
+    image->getPixels()[1] = Color(2.0f, 0.5f, 0.25f);
+    image->getPixels()[2] = Color(0.25f, 1.2f, 0.4f);
+    image->getPixels()[3] = Color(0.3f, 0.4f, 1.8f);
+    scene.setEnvironmentImage(image, 1.5f);
+    require(scene.hasImageEnvironment(), "image environment was not installed");
+    EnvironmentSample sample = scene.sampleEnvironment(glm::vec3(0.72f, 0.35f, 0.61f));
+    require(sample.pdf > 0.0f, "image environment sample pdf was zero");
+    require(finiteColor(sample.radiance), "image environment sample radiance was not finite");
+    require(scene.environmentPdf(sample.direction) > 0.0f, "image environment direction pdf was zero");
+
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+    Image<Color8> output(4, 4);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.samples_per_frame = 1;
+    renderer.render(scene, camera, output, render::RenderFrameContext{.scene_changed = true}, settings);
+    bool wrote_color = false;
+    for(int i = 0; i < output.getWidth() * output.getHeight(); ++i) {
+        Color8 pixel = output.getPixels()[i];
+        wrote_color = wrote_color || pixel.r > 0 || pixel.g > 0 || pixel.b > 0;
+    }
+    require(wrote_color, "image environment path render produced only black pixels");
+}
+
+void checkTileProgressAndDeterminism() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.2f, 0.25f, 0.3f));
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+
+    Image<Color8> a(5, 3);
+    Image<Color8> b(5, 3);
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.samples_per_frame = 3;
+    settings.sampler = render::PathSamplerMode::Sobol;
+
+    render::cpu::CpuPathRenderer renderer_a;
+    render::cpu::CpuPathRenderer renderer_b;
+    renderer_a.render(scene, camera, a, render::RenderFrameContext{.scene_changed = true}, settings);
+    renderer_b.render(scene, camera, b, render::RenderFrameContext{.scene_changed = true}, settings);
+
+    for(int i = 0; i < a.getWidth() * a.getHeight(); ++i) {
+        require(a.getPixels()[i] == b.getPixels()[i], "tiled CPU path render was not deterministic");
+    }
+    render::RenderProgress progress = renderer_a.getProgress();
+    require(progress.tile_count > 0 && progress.width == 5 && progress.height == 3, "renderer progress did not report tile dimensions");
+    require(renderer_a.getStatus().find("tiles") != std::string::npos, "renderer status did not report tiles");
+}
+
+void checkCpuPathCancellation() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.2f));
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+
+    Image<Color8> image(4, 4);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.accumulate_samples = true;
+    settings.samples_per_frame = 4;
+    std::atomic_bool cancel_requested(true);
+    render::RenderFrameContext context{
+        .scene_changed = true,
+        .cancel_requested = &cancel_requested
+    };
+    renderer.render(scene, camera, image, context, settings);
+    render::RenderProgress progress = renderer.getProgress();
+    require(progress.canceled, "CPU path renderer did not report cancellation");
+    require(progress.accumulated_samples == 0, "CPU path renderer accumulated a canceled frame");
+    require(renderer.getStatus().find("canceled") != std::string::npos, "CPU path renderer status did not mention cancellation");
+}
+
+void checkSvgfPreviewFinite() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.05f, 0.08f, 0.12f));
+    auto material = std::make_shared<PBRMaterial>();
+    material->tint = ColorA(0.8f, 0.7f, 0.4f, 1.0f);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, -3.0f), 0.75f), material);
+    scene.update();
+
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+    Image<Color8> image(6, 6);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::SVGF;
+    settings.samples_per_frame = 1;
+    settings.max_bounces = 2;
+    renderer.render(scene, camera, image, render::RenderFrameContext{.scene_changed = true}, settings);
+    renderer.render(scene, camera, image, render::RenderFrameContext{.frame_index = 1}, settings);
+    camera.setPosition(glm::vec3(0.02f, 0.0f, 0.0f));
+    renderer.render(scene, camera, image, render::RenderFrameContext{.frame_index = 2, .camera_changed = true}, settings);
+
+    bool wrote_color = false;
+    for(int i = 0; i < image.getWidth() * image.getHeight(); ++i) {
+        Color8 pixel = image.getPixels()[i];
+        wrote_color = wrote_color || pixel.r > 0 || pixel.g > 0 || pixel.b > 0;
+    }
+    require(wrote_color, "SVGF-style preview produced only black pixels");
+    require(renderer.getProgress().accumulated_samples > 0, "SVGF-style preview did not update progress");
+}
+
+void checkOIDNUnavailableBehavior() {
+    if(render::isOIDNAvailable()) return;
+
+    Scene scene;
+    scene.setBackgroundColor(Color(0.1f));
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+    Image<Color8> image(2, 2);
+    render::cpu::CpuPathRenderer renderer;
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::OIDN;
+    renderer.render(scene, camera, image, render::RenderFrameContext{.scene_changed = true}, settings);
+    require(
+        renderer.getStatus().find("OIDN not available") != std::string::npos,
+        "OIDN disabled build did not report unavailable denoiser"
+    );
 }
 
 void checkMaterialShowcase() {
@@ -1048,6 +1231,12 @@ int main() {
         checkPathNoOpExportAccumulation();
         checkTransformedSceneObject();
         checkBvhTraversalEquivalence();
+        checkTlasRefitAfterMovement();
+        checkEnvironmentSampling();
+        checkTileProgressAndDeterminism();
+        checkCpuPathCancellation();
+        checkSvgfPreviewFinite();
+        checkOIDNUnavailableBehavior();
         checkMaterialShowcase();
         checkGltfTransmissionMapping();
         checkGltfUvTextureTransform();

@@ -26,7 +26,7 @@ This file documents the role of each source file in the current modular layout.
 
 - `src/app/main.cpp`: app entry point; launches `Application`.
 - `src/app/application.hpp`: `Application` interface.
-- `src/app/application.cpp`: CLI parse, built-in showcase/export orchestration, SDL init, scene load, backend select.
+- `src/app/application.cpp`: CLI parse, environment setup, built-in showcase/export orchestration, async/cancelable CPU path export, SDL init, scene load, backend select.
 - `src/app/frame_loop.hpp`: frame loop interface binding app subsystems.
 - `src/app/frame_loop.cpp`: event/update/render loop + FPS title + screenshot trigger.
 - `src/app/input/camera_controller.hpp`: camera input controller interface.
@@ -43,7 +43,7 @@ This file documents the role of each source file in the current modular layout.
 - `src/core/color.hpp`: color types (`Color`, `ColorA`, `Color8`) + gamma/tonemap helpers.
 - `src/core/ray.hpp`: `Ray` and `RayHit` definitions.
 - `src/core/image.hpp`: `Image<T>` container + sampling/loading declarations.
-- `src/core/image.cpp`: stb-based image loading specializations.
+- `src/core/image.cpp`: stb-based LDR/HDR image loading specializations.
 - `src/core/image_io.hpp`: image export declarations.
 - `src/core/image_io.cpp`: stb-based PNG export implementation.
 
@@ -84,8 +84,10 @@ This file documents the role of each source file in the current modular layout.
 ### World
 - `src/scene/world/scene_object.hpp`: scene object transform/material/shape binding.
 - `src/scene/world/scene_object.cpp`: object transform updates and broad-phase checks.
-- `src/scene/world/scene.hpp`: scene container API (objects/lights/intersection queries).
-- `src/scene/world/scene.cpp`: scene traversal/stats implementation with top-level object BVH.
+- `src/scene/world/environment.hpp`: constant/image environment declaration and sampling API.
+- `src/scene/world/environment.cpp`: equirectangular environment evaluation, CDF construction, and importance sampling.
+- `src/scene/world/scene.hpp`: scene container API (objects/lights/environment/intersection queries).
+- `src/scene/world/scene.cpp`: scene traversal/stats implementation with top-level object BVH rebuild/refit.
 - `src/scene/world/scene_showcase.hpp`: built-in showcase scene declaration.
 - `src/scene/world/scene_showcase.cpp`: procedural material showcase scene construction.
 - `src/scene/world/world.hpp`: umbrella include for world module.
@@ -107,7 +109,7 @@ This file documents the role of each source file in the current modular layout.
 ## Render Layer (`src/render`)
 
 ### Renderer Interface
-- `src/render/renderer.hpp`: renderer abstraction (`IRenderer`) and backend enum/factory.
+- `src/render/renderer.hpp`: renderer abstraction (`IRenderer`), progress/cancellation reporting, denoiser/backend enums, and backend factory.
 - `src/render/renderer.cpp`: backend factory implementation.
 
 ### Shared Rendering Utilities
@@ -120,14 +122,14 @@ This file documents the role of each source file in the current modular layout.
 - `src/render/cpu/whitted_integrator.hpp`: Whitted integrator declaration.
 - `src/render/cpu/whitted_integrator.cpp`: recursive Whitted tracing implementation.
 - `src/render/cpu/path_integrator.hpp`: CPU path integrator declaration.
-- `src/render/cpu/path_integrator.cpp`: CPU path integrator implementation.
+- `src/render/cpu/path_integrator.cpp`: CPU path integrator implementation, including environment-miss and direct-sky sampling.
 - `src/render/cpu/cpu_whitted_renderer.hpp`: CPU Whitted renderer declaration.
 - `src/render/cpu/cpu_whitted_renderer.cpp`: image rendering using Whitted integrator.
 - `src/render/cpu/cpu_path_renderer.hpp`: CPU path renderer declaration.
-- `src/render/cpu/cpu_path_renderer.cpp`: image rendering using the path integrator, temporal accumulation, and simplified SVGF-style denoising.
+- `src/render/cpu/cpu_path_renderer.cpp`: cancel-aware tiled image rendering using the path integrator, temporal accumulation, optional OIDN hook, and SVGF-style A-trous preview denoising.
 
 ## Tooling (`tools`)
 
 - `tools/check_include_boundaries.py`: validates include-direction constraints between modules.
-- `tools/path_phase2_sanity.cpp`: sanity checks for path tracing, glTF import, showcase construction, stats, and PNG export.
+- `tools/path_phase2_sanity.cpp`: sanity checks for path tracing, glTF import, showcase construction, stats, environment sampling, cancellation, denoising, and PNG export.
 - `tools/bvh_benchmark.cpp`: compares linear object traversal against top-level BVH traversal for deterministic camera rays.

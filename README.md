@@ -19,10 +19,11 @@ It combines Whitted-style ray tracing, progressive CPU path tracing, textured PB
 - Fallback normal/tangent generation for incomplete mesh data
 - First-person camera controls and screenshot capture (`P` key)
 - BVH-accelerated traversal:
-  - Top-level object BVH for scene objects
+  - Top-level object BVH for scene objects with diagnostics and optional refit hooks
   - Per-mesh triangle BVH using median splits on the longest centroid axis
 - Built-in material showcase scene for glass, smooth mirror/metal, rough metal, and dielectric PBR
-- Non-interactive PNG export for reproducible portfolio captures
+- Non-interactive PNG export for reproducible portfolio captures, with async CPU path progress and Ctrl+C cancellation
+- Optional image-based environment lighting from LDR/HDR equirectangular maps
 
 ## Rendering Pipeline
 
@@ -38,11 +39,14 @@ It combines Whitted-style ray tracing, progressive CPU path tracing, textured PB
 - Low-discrepancy sampling (LDS)
 - Emissive-material light transport
 - Temporal accumulation and simplified SVGF-style denoising with history reprojection
+- Tiled CPU path rendering with progress/status reporting and cancelable export batches
 - Uniform, power-based, and contribution-weighted light selection
+- Optional OIDN denoiser hook behind `ASTRATRACE_ENABLE_OIDN=ON`
 
 ## Feature Notes
 
 - `SVGF` in the UI is a compact SVGF-style preview denoiser, not a full paper implementation.
+- `OIDN` is optional and unavailable in default builds unless Open Image Denoise is enabled and found by CMake.
 - `Contribution` light sampling estimates local light contribution per shading point; it is not a persistent light-tree hierarchy.
 - `KHR_materials_iridescence` is approximated as tinted rough PBR for visibility; true thin-film interference is deferred.
 - The project is CPU-only. Build output or third-party dependency logs may mention graphics APIs internally, but AstraTrace does not expose a GPU renderer.
@@ -56,6 +60,7 @@ It combines Whitted-style ray tracing, progressive CPU path tracing, textured PB
 - tinygltf + nlohmann/json
 - stb
 - OpenMP
+- Optional: Intel Open Image Denoise
 
 ## Build and Run
 
@@ -79,6 +84,7 @@ cmake --build build --config Release
 ./build/bin/astratrace_app ./scenes/Duck/Duck.gltf --backend cpu-whitted
 ./build/bin/astratrace_app --showcase material --backend cpu-path
 ./build/bin/astratrace_app --showcase material --backend cpu-path --export screenshots/portfolio/material-showcase.png --width 1280 --height 720 --samples 64 --bounces 5 --denoiser temporal
+./build/bin/astratrace_app --showcase material --backend cpu-path --environment <env.hdr> --environment-strength 1.0
 cmake --build build --config Release --target check_include_boundaries
 cmake --build build --config Release --target check_path_phase2_sanity
 cmake --build build --config Release --target benchmark_bvh
@@ -92,9 +98,12 @@ Export options:
 - `--export <out.png>`
 - `--width <pixels>` / `--height <pixels>`
 - `--samples <spp>` and `--bounces <count>` for `cpu-path`; `none` and `temporal` exports accumulate the requested total samples
-- `--denoiser none|temporal|svgf`; `svgf` is a preview-style export path
+- `--denoiser none|temporal|svgf|oidn`; `svgf` is a preview-style export path, `oidn` requires an OIDN-enabled build
 - `--sampler random|halton|sobol`
 - `--light-sampler uniform|power|contribution`
+- `--environment <image.hdr|png|jpg>` and `--environment-strength <float>`
+
+CPU path export runs as an asynchronous job in small sample batches and logs progress. Press `Ctrl+C` to cancel before the PNG is written.
 
 ## Runtime Controls
 

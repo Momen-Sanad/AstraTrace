@@ -45,6 +45,7 @@ private:
     void refreshSceneList();
     bool reloadScene(const std::string& scene_path);
     bool switchBackend(render::RenderBackend backend);
+    void logBenchmarkSnapshot(const char* event) const;
 
     SDL_Window* window = nullptr;
     SDL_Renderer* sdl_renderer = nullptr;
@@ -60,6 +61,8 @@ private:
     render::PathRenderSettings previous_path_settings;
     uint64_t render_frame_index = 0;
     bool scene_changed_for_render = true;
+    bool pending_benchmark_log = true;
+    std::string pending_benchmark_event = "First rendered frame after startup";
 
     std::string active_scene_path;
     std::vector<std::string> scene_paths;

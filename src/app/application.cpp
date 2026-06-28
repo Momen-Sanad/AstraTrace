@@ -674,7 +674,6 @@ int runInteractive(const AppConfig& config) {
     }
 
     CameraController controller(window, camera);
-    scene.printStats();
 
     FrameLoop frame_loop(
         window,

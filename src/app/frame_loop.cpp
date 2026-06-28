@@ -123,6 +123,56 @@ const char* backendToLabel(render::RenderBackend backend) {
     }
 }
 
+const char* samplerToLabel(render::PathSamplerMode sampler) {
+    switch(sampler) {
+    case render::PathSamplerMode::Random:
+        return "Random";
+    case render::PathSamplerMode::Halton:
+        return "Halton";
+    case render::PathSamplerMode::Sobol:
+    default:
+        return "Sobol";
+    }
+}
+
+const char* denoiserToLabel(render::PathDenoiserMode denoiser) {
+    switch(denoiser) {
+    case render::PathDenoiserMode::None:
+        return "NoOp";
+    case render::PathDenoiserMode::Temporal:
+        return "Temporal";
+    case render::PathDenoiserMode::SVGF:
+        return "SVGF-style";
+    case render::PathDenoiserMode::OIDN:
+        return "OIDN";
+    default:
+        return "Unknown";
+    }
+}
+
+const char* lightSamplerToLabel(render::PathLightSamplerMode sampler) {
+    switch(sampler) {
+    case render::PathLightSamplerMode::Uniform:
+        return "Uniform";
+    case render::PathLightSamplerMode::Power:
+        return "Power";
+    case render::PathLightSamplerMode::PartialBRDF:
+    default:
+        return "Contribution";
+    }
+}
+
+const char* enabledLabel(bool value) {
+    return value ? "on" : "off";
+}
+
+std::string sceneDisplayName(const std::string& scene_path) {
+    if(isBuiltinScenePath(scene_path)) return "Material Showcase";
+    std::filesystem::path path(scene_path);
+    std::string filename = path.filename().string();
+    return filename.empty() ? scene_path : filename;
+}
+
 render::RenderBackend backendFromIndex(int index) {
     switch(index) {
     case 1:
@@ -171,6 +221,84 @@ bool frameCameraToScene(const Scene& scene, Camera& camera, float aspect_ratio) 
 }
 
 } // namespace
+
+void FrameLoop::logBenchmarkSnapshot(const char* event) const {
+    const SceneStats stats = scene.getStats();
+    const render::RenderProgress progress = renderer ? renderer->getProgress() : render::RenderProgress{};
+    const bool has_frame_timing = progress.last_frame_ms > 0.0;
+    const double megapixels = static_cast<double>(buffer.getWidth()) * static_cast<double>(buffer.getHeight()) / 1000000.0;
+    const double frame_seconds = progress.last_frame_ms / 1000.0;
+    const double mpix_per_second = has_frame_timing && frame_seconds > 0.0
+        ? megapixels / frame_seconds
+        : 0.0;
+    const double path_msamples_per_second =
+        active_backend == render::RenderBackend::CpuPath && has_frame_timing && frame_seconds > 0.0
+            ? (megapixels * static_cast<double>(std::max(path_settings.samples_per_frame, 1))) / frame_seconds
+            : 0.0;
+
+    SDL_Log(
+        "\n"
+        "================ AstraTrace Benchmark Snapshot ================\n"
+        "Event: %s\n"
+        "Scene: %s\n"
+        "Scene Path: %s\n"
+        "Backend: %s\n"
+        "Resolution: %dx%d\n"
+        "Scene Stats: objects=%llu, punctualLights=%llu, pathLights=%llu, environment=%s\n"
+        "TLAS: nodes=%llu, leaves=%llu, maxDepth=%d, rebuilds=%llu, refits=%llu\n"
+        "TLAS Timing: lastBuild=%.3f ms, lastRefit=%.3f ms\n"
+        "Renderer: %s\n"
+        "Frame Timing: %s\n"
+        "================================================================",
+        event,
+        sceneDisplayName(active_scene_path).c_str(),
+        active_scene_path.c_str(),
+        backendToLabel(active_backend),
+        buffer.getWidth(),
+        buffer.getHeight(),
+        static_cast<unsigned long long>(stats.object_count),
+        static_cast<unsigned long long>(stats.punctual_light_count),
+        static_cast<unsigned long long>(stats.path_light_count),
+        scene.hasImageEnvironment() ? "image" : "constant",
+        static_cast<unsigned long long>(stats.top_level_bvh_node_count),
+        static_cast<unsigned long long>(stats.top_level_bvh_leaf_count),
+        stats.top_level_bvh_max_depth,
+        static_cast<unsigned long long>(stats.top_level_bvh_rebuild_count),
+        static_cast<unsigned long long>(stats.top_level_bvh_refit_count),
+        stats.last_top_level_bvh_build_ms,
+        stats.last_top_level_bvh_refit_ms,
+        renderer ? renderer->getStatus().c_str() : "renderer unavailable",
+        has_frame_timing ? "see throughput lines below" : "pending first rendered frame"
+    );
+
+    if(active_backend == render::RenderBackend::CpuPath) {
+        SDL_Log(
+            "Path Settings: samplesPerFrame=%d, maxBounces=%d, denoiser=%s, sampler=%s, lightSampler=%s, NEE=%s, MIS=%s, RR=%s, regularization=%s",
+            path_settings.samples_per_frame,
+            path_settings.max_bounces,
+            denoiserToLabel(path_settings.denoiser),
+            samplerToLabel(path_settings.sampler),
+            lightSamplerToLabel(path_settings.light_sampler),
+            enabledLabel(path_settings.enable_nee),
+            enabledLabel(path_settings.enable_mis),
+            enabledLabel(path_settings.enable_russian_roulette),
+            enabledLabel(path_settings.enable_path_regularization)
+        );
+        SDL_Log(
+            "Path Progress: accumulatedSamples=%u, tiles=%d, lastBatch=%.2f ms, throughput=%.3f Mpixel-samples/s",
+            progress.accumulated_samples,
+            progress.tile_count,
+            progress.last_frame_ms,
+            path_msamples_per_second
+        );
+    } else {
+        SDL_Log(
+            "Whitted Progress: lastFrame=%.2f ms, throughput=%.3f Mpixels/s",
+            progress.last_frame_ms,
+            mpix_per_second
+        );
+    }
+}
 
 void FrameLoop::refreshSceneList() {
     std::filesystem::path active_path = isBuiltinScenePath(active_scene_path)
@@ -259,7 +387,9 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
         scene_changed_for_render = true;
         if(renderer) renderer->reset();
 
-        scene.printStats();
+        logBenchmarkSnapshot("Scene loaded");
+        pending_benchmark_event = "First rendered frame after scene load";
+        pending_benchmark_log = true;
         refreshSceneList();
         return true;
     }
@@ -293,13 +423,9 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
     scene_changed_for_render = true;
     if(renderer) renderer->reset();
 
-    scene.printStats();
-    SDL_Log(
-        "Loaded Scene: Objects=%llu Lights=%llu CameraFromGLTF=%s",
-        static_cast<unsigned long long>(load_result.object_count),
-        static_cast<unsigned long long>(load_result.light_count),
-        load_result.camera_loaded ? "true" : "false"
-    );
+    logBenchmarkSnapshot(load_result.camera_loaded ? "Scene loaded (glTF camera)" : "Scene loaded (auto-framed camera)");
+    pending_benchmark_event = "First rendered frame after scene load";
+    pending_benchmark_log = true;
 
     refreshSceneList();
     return true;
@@ -328,7 +454,9 @@ bool FrameLoop::switchBackend(render::RenderBackend backend) {
     selected_backend = backend;
     scene_changed_for_render = true;
     status_message = std::string("Backend switched to: ") + backendToLabel(active_backend);
-    SDL_Log("Renderer backend switched to: %s", backendToLabel(active_backend));
+    logBenchmarkSnapshot("Backend switched");
+    pending_benchmark_event = "First rendered frame after backend switch";
+    pending_benchmark_log = true;
     return true;
 }
 
@@ -355,6 +483,7 @@ int FrameLoop::run() {
     status_message = isBuiltinScenePath(active_scene_path)
         ? "Loaded: Material Showcase"
         : "Loaded: " + active_scene_path;
+    logBenchmarkSnapshot("Startup scene ready");
 
     FPSTracker fps_tracker;
     Uint64 last_frame_time = SDL_GetTicksNS();
@@ -411,6 +540,10 @@ int FrameLoop::run() {
             path_settings.reset_requested = false;
             previous_path_settings = settings_for_render;
             scene_changed_for_render = false;
+            if(pending_benchmark_log) {
+                logBenchmarkSnapshot(pending_benchmark_event.c_str());
+                pending_benchmark_log = false;
+            }
         }
 
         if(!SDL_UpdateTexture(

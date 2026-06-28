@@ -12,6 +12,11 @@ Color computeShadow(const Scene& scene, Ray ray, float max_distance) {
         if(auto object = scene.findClosestHit(ray, hit)) {
             if(hit.distance > max_distance) break;
 
+            float endpoint_tolerance = glm::max(4.0f * ray_epsilon, 0.01f * max_distance);
+            if(object->isEmissive() && max_distance - hit.distance <= endpoint_tolerance) {
+                break;
+            }
+
             auto material = object->getMaterial();
             if(material && !material->castsShadows()) {
                 ray.origin += ray.direction * (hit.distance + ray_epsilon);

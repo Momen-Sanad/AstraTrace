@@ -13,6 +13,8 @@ namespace render::cpu {
 namespace {
 
 constexpr float RAY_EPSILON = 0.002f;
+constexpr std::size_t DIRECT_ALL_LIGHT_LIMIT = 4;
+constexpr float DELTA_LIGHT_PREVIEW_SCALE = 3.1415926535f;
 
 float maxChannel(const Color& color) {
     return glm::max(color.r, glm::max(color.g, color.b));
@@ -21,20 +23,6 @@ float maxChannel(const Color& color) {
 Color safeColor(Color color) {
     if(!std::isfinite(color.r) || !std::isfinite(color.g) || !std::isfinite(color.b)) return Color(0.0f);
     return glm::max(color, Color(0.0f));
-}
-
-glm::vec3 makeTangent(const glm::vec3& normal) {
-    glm::vec3 up = glm::abs(normal.y) < 0.999f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
-    return glm::normalize(glm::cross(up, normal));
-}
-
-glm::vec3 uniformHemisphere(const glm::vec2& u, const glm::vec3& normal) {
-    float z = glm::clamp(u.x, 0.0f, 1.0f);
-    float r = glm::sqrt(glm::max(0.0f, 1.0f - z * z));
-    float phi = glm::two_pi<float>() * glm::clamp(u.y, 0.0f, 1.0f);
-    glm::vec3 tangent = makeTangent(normal);
-    glm::vec3 bitangent = glm::cross(normal, tangent);
-    return glm::normalize(r * glm::cos(phi) * tangent + r * glm::sin(phi) * bitangent + z * normal);
 }
 
 float lightWeight(
@@ -125,6 +113,20 @@ float lightProbability(
     return target_weight / total_weight;
 }
 
+bool useAllDirectLights(const Scene& scene) {
+    const auto& lights = scene.getPathLights();
+    return !lights.empty() && lights.size() <= DIRECT_ALL_LIGHT_LIMIT;
+}
+
+glm::vec3 offsetShadowOrigin(
+    const glm::vec3& point,
+    const glm::vec3& normal,
+    const glm::vec3& direction
+) {
+    glm::vec3 offset_normal = glm::dot(normal, direction) >= 0.0f ? normal : -normal;
+    return point + RAY_EPSILON * direction + (4.0f * RAY_EPSILON) * offset_normal;
+}
+
 void addContribution(
     PathResult& result,
     Color radiance,
@@ -146,24 +148,17 @@ void addContribution(
     }
 }
 
-Color directLighting(
+Color estimateDirectLightingFromLight(
     const Scene& scene,
+    const std::shared_ptr<Light>& light,
+    float light_pick_pdf,
     const glm::vec3& point,
-    const glm::vec3& normal,
+    const glm::vec3& geometric_normal,
     const glm::vec3& view,
     const BSDF& bsdf,
     Sampler& sampler,
     const PathRenderSettings& settings
 ) {
-    float light_pick_pdf = 0.0f;
-    std::shared_ptr<Light> light = sampleLight(
-        scene,
-        sampler,
-        point,
-        normal,
-        settings.light_sampler,
-        light_pick_pdf
-    );
     if(!light || light_pick_pdf <= 0.0f) return Color(0.0f);
 
     LightSample sample = light->sample(point, sampler.next3());
@@ -180,7 +175,7 @@ Color directLighting(
     float max_distance = sample.delta ? sample.distance : sample.distance - RAY_EPSILON;
     Color visibility = render::common::computeShadow(
         scene,
-        {point + RAY_EPSILON * sample.light_vector, sample.light_vector},
+        {offsetShadowOrigin(point, geometric_normal, sample.light_vector), sample.light_vector},
         max_distance
     );
     if(maxChannel(visibility) <= 0.0f) return Color(0.0f);
@@ -194,34 +189,64 @@ Color directLighting(
     }
 
     if(sample.delta) {
-        return visibility * sample.radiance * f / light_pick_pdf;
+        return DELTA_LIGHT_PREVIEW_SCALE * visibility * sample.radiance * f / light_pick_pdf;
     }
     return visibility * sample.radiance * f * (mis_weight / light_pdf);
+}
+
+Color directLighting(
+    const Scene& scene,
+    const glm::vec3& point,
+    const glm::vec3& normal,
+    const glm::vec3& geometric_normal,
+    const glm::vec3& view,
+    const BSDF& bsdf,
+    Sampler& sampler,
+    const PathRenderSettings& settings
+) {
+    const auto& lights = scene.getPathLights();
+    if(lights.empty()) return Color(0.0f);
+
+    if(useAllDirectLights(scene)) {
+        Color sum(0.0f);
+        for(const auto& light : lights) {
+            sum += estimateDirectLightingFromLight(scene, light, 1.0f, point, geometric_normal, view, bsdf, sampler, settings);
+        }
+        return sum;
+    }
+
+    float light_pick_pdf = 0.0f;
+    std::shared_ptr<Light> light = sampleLight(
+        scene,
+        sampler,
+        point,
+        normal,
+        settings.light_sampler,
+        light_pick_pdf
+    );
+    return estimateDirectLightingFromLight(scene, light, light_pick_pdf, point, geometric_normal, view, bsdf, sampler, settings);
 }
 
 Color directSkyLighting(
     const Scene& scene,
     const glm::vec3& point,
     const glm::vec3& normal,
+    const glm::vec3& geometric_normal,
     const glm::vec3& view,
     const BSDF& bsdf,
     Sampler& sampler,
     const PathRenderSettings& settings
 ) {
+    if(!scene.hasImageEnvironment()) return Color(0.0f);
+
     glm::vec3 direction;
     Color sky(0.0f);
     float sky_pdf = 0.0f;
 
-    if(scene.hasImageEnvironment()) {
-        EnvironmentSample sample = scene.sampleEnvironment(sampler.next3());
-        direction = sample.direction;
-        sky = sample.radiance;
-        sky_pdf = sample.pdf;
-    } else {
-        direction = uniformHemisphere(sampler.next2(), normal);
-        sky = scene.evaluateEnvironment(direction);
-        sky_pdf = 1.0f / (2.0f * glm::pi<float>());
-    }
+    EnvironmentSample sample = scene.sampleEnvironment(sampler.next3());
+    direction = sample.direction;
+    sky = sample.radiance;
+    sky_pdf = sample.pdf;
 
     if(maxChannel(sky) <= 0.0f || sky_pdf <= 0.0f) return Color(0.0f);
     DiffuseSpecular bsdf_value = bsdf.evaluate(direction, view);
@@ -230,7 +255,7 @@ Color directSkyLighting(
 
     Color visibility = render::common::computeShadow(
         scene,
-        {point + RAY_EPSILON * direction, direction},
+        {offsetShadowOrigin(point, geometric_normal, direction), direction},
         std::numeric_limits<float>::max()
     );
     if(maxChannel(visibility) <= 0.0f) return Color(0.0f);
@@ -275,10 +300,20 @@ PathResult PathIntegrator::trace(
         RayHit hit;
         std::shared_ptr<SceneObject> object = scene.findClosestHit(ray, hit);
         if(!object) {
+            Color environment = scene.evaluateEnvironment(ray.direction);
+            if(
+                !scene.hasImageEnvironment() &&
+                bounce > 0 &&
+                previous_lobe == LobeType::Diffuse
+            ) {
+                environment = Color(0.0f);
+            }
+
             float mis_weight = 1.0f;
             if(
                 settings.enable_nee &&
                 settings.enable_mis &&
+                scene.hasImageEnvironment() &&
                 bounce > 0 &&
                 previous_lobe != LobeType::Specular &&
                 previous_lobe != LobeType::Transmission
@@ -290,7 +325,7 @@ PathResult PathIntegrator::trace(
             }
             addContribution(
                 result,
-                throughput * scene.evaluateEnvironment(ray.direction) * mis_weight,
+                throughput * environment * mis_weight,
                 previous_lobe,
                 bounce == 0,
                 false
@@ -335,13 +370,15 @@ PathResult PathIntegrator::trace(
                 float mis_weight = 1.0f;
                 if(settings.enable_mis && previous_lobe != LobeType::Specular && previous_lobe != LobeType::Transmission) {
                     auto hit_light = std::static_pointer_cast<Light>(object);
-                    float light_pick_pdf = lightProbability(
-                        scene,
-                        hit_light,
-                        previous_path_point,
-                        previous_path_normal,
-                        settings.light_sampler
-                    );
+                    float light_pick_pdf = useAllDirectLights(scene)
+                        ? 1.0f
+                        : lightProbability(
+                            scene,
+                            hit_light,
+                            previous_path_point,
+                            previous_path_normal,
+                            settings.light_sampler
+                        );
                     float light_pdf = light_pick_pdf * object->pdf(ray, hit);
                     float bp = previous_bsdf_pdf * previous_bsdf_pdf;
                     float lp = light_pdf * light_pdf;
@@ -351,29 +388,28 @@ PathResult PathIntegrator::trace(
             }
         }
 
-        if(bounce == 0 && !bsdf->isDelta()) {
-            Color ambient = scene.getAmbient();
-            if(maxChannel(ambient) > 0.0f) {
-                addContribution(
-                    result,
-                    throughput * ambient * bsdf->getSubsurfaceAlbedo(),
-                    previous_lobe,
-                    true,
-                    true
-                );
-                addContribution(
-                    result,
-                    throughput * ambient * bsdf->getSpecularColor() * 0.28f,
-                    LobeType::Specular,
-                    true,
-                    true
-                );
-            }
-        }
-
         if(settings.enable_nee && !bsdf->isDelta()) {
-            Color direct = throughput * directLighting(scene, point, bsdf->getNormal(), view, *bsdf, sampler, settings);
-            direct += throughput * directSkyLighting(scene, point, bsdf->getNormal(), view, *bsdf, sampler, settings);
+            glm::vec3 geometric_normal = object->getGeometricNormal(ray, hit);
+            Color direct = throughput * directLighting(
+                scene,
+                point,
+                bsdf->getNormal(),
+                geometric_normal,
+                view,
+                *bsdf,
+                sampler,
+                settings
+            );
+            direct += throughput * directSkyLighting(
+                scene,
+                point,
+                bsdf->getNormal(),
+                geometric_normal,
+                view,
+                *bsdf,
+                sampler,
+                settings
+            );
             addContribution(result, direct, previous_lobe, bounce == 0, true);
         }
 

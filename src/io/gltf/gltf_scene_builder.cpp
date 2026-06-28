@@ -204,10 +204,12 @@ GltfSceneLoadResult buildSceneFromGltfModel(
     }
 
     if(result.light_count == 0 && !has_authored_emissive_material) {
-        const float key_strength = has_transmissive_material ? 2.20f : 0.95f;
-        const float fill_strength = has_transmissive_material ? 1.25f : 0.48f;
-        const float ambient_strength = has_transmissive_material ? 0.85f : 0.34f;
-        const float background_strength = has_transmissive_material ? 0.50f : 0.11f;
+        // Keep no-light asset previews readable with real shadow-casting lights.
+        // Ambient is intentionally tiny: CPU Path ignores it, and Whitted only uses it as a preview lift.
+        const float key_strength = has_transmissive_material ? 2.75f : 1.55f;
+        const float fill_strength = has_transmissive_material ? 0.95f : 0.72f;
+        const float ambient_strength = has_transmissive_material ? 0.16f : 0.08f;
+        const float background_strength = has_transmissive_material ? 0.28f : 0.10f;
         scene.addLight(std::make_shared<DirectionLight>(
             glm::normalize(glm::vec3(-0.5f, -1.0f, -0.35f)),
             Color(key_strength)
@@ -244,11 +246,11 @@ GltfSceneLoadResult buildSceneFromGltfModel(
                 result.warning,
                 "No glTF punctual lights found. Using emissive geometry as physical area lights."
             );
-            scene.setAmbient(Color(0.0f));
+            scene.setAmbient(Color(0.06f));
         }
         scene.setBackgroundColor(Color(0.0f));
     } else {
-        scene.setAmbient(Color(0.02f));
+        scene.setAmbient(Color(0.08f));
         scene.setBackgroundColor(Color(0.03f));
     }
 

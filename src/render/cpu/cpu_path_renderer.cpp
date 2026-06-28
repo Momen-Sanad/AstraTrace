@@ -254,11 +254,21 @@ void CpuPathRenderer::filterSVGFATrous(
                     const Color albedo_delta = glm::abs(center.albedo - sample.albedo);
                     const float albedo_max = glm::max(albedo_delta.r, glm::max(albedo_delta.g, albedo_delta.b));
                     const float albedo_weight = std::exp(-8.0f * albedo_max);
+                    const float center_lum = luminance(input[static_cast<std::size_t>(center_index)]);
+                    const float sample_lum = luminance(input[static_cast<std::size_t>(sample_index)]);
+                    const float lum_scale = glm::max(0.03f, 0.22f * glm::max(center_lum, sample_lum));
+                    const float luminance_weight = std::exp(-glm::abs(center_lum - sample_lum) / lum_scale);
                     const float variance_weight = 1.0f / (1.0f + 8.0f * glm::max(center.variance, sample.variance));
                     const float spatial = kernel[static_cast<std::size_t>(ox + 2)] *
                         kernel[static_cast<std::size_t>(oy + 2)];
                     const float weight =
-                        spatial * object_weight * normal_weight * depth_weight * albedo_weight * variance_weight;
+                        spatial *
+                        object_weight *
+                        normal_weight *
+                        depth_weight *
+                        albedo_weight *
+                        luminance_weight *
+                        variance_weight;
                     sum += input[static_cast<std::size_t>(sample_index)] * weight;
                     weight_sum += weight;
                 }
@@ -562,8 +572,11 @@ void CpuPathRenderer::render(
     #pragma omp parallel for schedule(static)
     for(int i = 0; i < static_cast<int>(pixel_count); ++i) {
         const std::size_t idx = static_cast<std::size_t>(i);
-        svgf_current[idx].color = sanitize(svgf_filter_a[idx]);
-        pixels[i] = encodeColor(tonemap_aces(svgf_current[idx].color));
+        const Color filtered = sanitize(svgf_filter_a[idx]);
+        const Color history_ready = svgf_current[idx].color;
+        const float filter_weight = glm::clamp(0.72f - 0.18f * svgf_current[idx].variance, 0.45f, 0.72f);
+        const Color output_color = glm::mix(history_ready, filtered, filter_weight);
+        pixels[i] = encodeColor(tonemap_aces(output_color));
     }
 
     svgf_history.swap(svgf_current);

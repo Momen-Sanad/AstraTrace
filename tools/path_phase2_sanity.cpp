@@ -18,7 +18,9 @@
 #include "io/gltf/gltf_loader.hpp"
 #include "render/cpu/alias_table.hpp"
 #include "render/cpu/cpu_path_renderer.hpp"
+#include "render/cpu/cpu_whitted_renderer.hpp"
 #include "render/cpu/sampler.hpp"
+#include "render/common/shadow_utils.hpp"
 #include "scene/camera/camera.hpp"
 #include "scene/geometry/triangle.hpp"
 #include "scene/materials/materials.hpp"
@@ -33,6 +35,16 @@ void require(bool condition, const char* message) {
 
 bool finiteColor(Color color) {
     return std::isfinite(color.r) && std::isfinite(color.g) && std::isfinite(color.b);
+}
+
+bool imageHasNonBlackPixel(const Image<Color8>& image) {
+    for(int i = 0; i < image.getWidth() * image.getHeight(); ++i) {
+        const Color8 pixel = image.getPixels()[i];
+        if(pixel.r > 0 || pixel.g > 0 || pixel.b > 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void checkSamplers() {
@@ -300,6 +312,138 @@ void checkEnvironmentSampling() {
         wrote_color = wrote_color || pixel.r > 0 || pixel.g > 0 || pixel.b > 0;
     }
     require(wrote_color, "image environment path render produced only black pixels");
+}
+
+void checkConstantBackgroundDoesNotBecomeDirectLight() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.35f, 0.35f, 0.35f));
+    scene.setAmbient(Color(0.0f));
+    auto material = std::make_shared<PBRMaterial>();
+    material->tint = ColorA(0.8f, 0.15f, 0.1f, 1.0f);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, -3.0f), 0.75f), material);
+    scene.update();
+
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.samples_per_frame = 1;
+    settings.max_bounces = 2;
+    settings.sampler = render::PathSamplerMode::Sobol;
+
+    Image<Color8> without_nee(6, 6);
+    Image<Color8> with_nee(6, 6);
+    render::cpu::CpuPathRenderer renderer_without_nee;
+    render::cpu::CpuPathRenderer renderer_with_nee;
+
+    settings.enable_nee = false;
+    renderer_without_nee.render(scene, camera, without_nee, render::RenderFrameContext{.scene_changed = true}, settings);
+    settings.enable_nee = true;
+    renderer_with_nee.render(scene, camera, with_nee, render::RenderFrameContext{.scene_changed = true}, settings);
+
+    for(int i = 0; i < without_nee.getWidth() * without_nee.getHeight(); ++i) {
+        require(
+            without_nee.getPixels()[i] == with_nee.getPixels()[i],
+            "constant background was sampled as direct sky lighting"
+        );
+    }
+}
+
+void checkCpuPathIgnoresPreviewAmbient() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.0f));
+    scene.setAmbient(Color(1.0f));
+    auto material = std::make_shared<PBRMaterial>();
+    material->tint = ColorA(0.8f, 0.2f, 0.1f, 1.0f);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, -3.0f), 0.75f), material);
+    scene.update();
+
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    camera.setHalfSize(glm::radians(60.0f), 1.0f);
+
+    render::PathRenderSettings settings;
+    settings.denoiser = render::PathDenoiserMode::None;
+    settings.samples_per_frame = 1;
+    settings.max_bounces = 2;
+    settings.enable_nee = true;
+    settings.sampler = render::PathSamplerMode::Sobol;
+
+    Image<Color8> output(7, 7);
+    render::cpu::CpuPathRenderer renderer;
+    renderer.render(scene, camera, output, render::RenderFrameContext{.scene_changed = true}, settings);
+
+    for(int i = 0; i < output.getWidth() * output.getHeight(); ++i) {
+        const Color8 pixel = output.getPixels()[i];
+        require(
+            pixel.r == 0 && pixel.g == 0 && pixel.b == 0,
+            "CPU path renderer used preview ambient as an unoccluded light source"
+        );
+    }
+}
+
+void checkEmissiveEndpointShadow() {
+    Scene scene;
+    auto light_material = std::make_shared<PBRMaterial>();
+    light_material->tint = ColorA(1.0f);
+    light_material->emissive_power = Color(8.0f);
+
+    Vertex v0{
+        glm::vec3(-1.0f, -1.0f, -2.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f),
+        glm::vec3(1.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f),
+        glm::vec2(0.0f, 0.0f)
+    };
+    Vertex v1 = v0;
+    Vertex v2 = v0;
+    v1.position = glm::vec3(1.0f, -1.0f, -2.0f);
+    v1.uv = glm::vec2(1.0f, 0.0f);
+    v2.position = glm::vec3(0.0f, 1.0f, -2.0f);
+    v2.uv = glm::vec2(0.5f, 1.0f);
+
+    scene.createObject(std::make_shared<Triangle>(v0, v1, v2), light_material);
+    scene.update();
+
+    Ray shadow_ray{glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+    Color endpoint_shadow = render::common::computeShadow(scene, shadow_ray, 2.0f);
+    require(
+        glm::min(endpoint_shadow.r, glm::min(endpoint_shadow.g, endpoint_shadow.b)) > 0.99f,
+        "emissive endpoint shadow ray self-blocked its target light"
+    );
+
+    Color occluder_shadow = render::common::computeShadow(scene, shadow_ray, 3.0f);
+    require(
+        glm::max(occluder_shadow.r, glm::max(occluder_shadow.g, occluder_shadow.b)) < 0.01f,
+        "emissive geometry was ignored when it was not the shadow-ray endpoint"
+    );
+}
+
+void checkWhittedPbrMetalReflectsEnvironment() {
+    Scene scene;
+    scene.setBackgroundColor(Color(0.35f, 0.35f, 0.38f));
+    auto material = std::make_shared<PBRMaterial>();
+    material->tint = ColorA(1.0f, 0.45f, 0.08f, 1.0f);
+    material->metal_roughness = std::make_shared<Image<Color>>(1, 1);
+    material->metal_roughness->getPixels()[0] = Color(1.0f, 0.25f, 0.0f);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, -3.0f), 0.75f), material);
+    scene.update();
+
+    Camera camera;
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    camera.setHalfSize(glm::radians(45.0f), 1.0f);
+
+    Image<Color8> output(7, 7);
+    render::cpu::CpuWhittedRenderer renderer;
+    renderer.render(scene, camera, output);
+
+    const Color8 center = output.getPixels()[3 * output.getWidth() + 3];
+    require(
+        center.r > 0 || center.g > 0 || center.b > 0,
+        "Whitted PBR metallic preview did not reflect the environment"
+    );
 }
 
 void checkTileProgressAndDeterminism() {
@@ -1060,12 +1204,15 @@ void checkRequiredScenes() {
     struct SceneCase {
         const char* path;
         bool requires_emissive_geometry;
+        bool render_smoke_test;
     };
 
     const SceneCase cases[] = {
-        {"scenes/cornell-box-1.glb", true},
-        {"scenes/cornell-box-2.glb", false},
-        {"scenes/sponza.glb", false},
+        {"scenes/cornell-box-1.glb", true, false},
+        {"scenes/cornell-box-2.glb", false, false},
+        {"scenes/sponza.glb", false, false},
+        {"scenes/glTF/ABeautifulGame.gltf", false, true},
+        {"scenes/glTF-Binary/ABeautifulGame.glb", false, true},
     };
 
     for(const SceneCase& scene_case : cases) {
@@ -1099,6 +1246,15 @@ void checkRequiredScenes() {
         settings.samples_per_frame = 1;
         render::RenderFrameContext context{.scene_changed = true};
         renderer.render(scene, camera, image, context, settings);
+
+        if(scene_case.render_smoke_test) {
+            require(imageHasNonBlackPixel(image), "required scene CPU path smoke render was all black");
+
+            Image<Color8> whitted_image(8, 8);
+            render::cpu::CpuWhittedRenderer whitted_renderer;
+            whitted_renderer.render(scene, camera, whitted_image);
+            require(imageHasNonBlackPixel(whitted_image), "required scene CPU Whitted smoke render was all black");
+        }
     }
 }
 
@@ -1233,6 +1389,10 @@ int main() {
         checkBvhTraversalEquivalence();
         checkTlasRefitAfterMovement();
         checkEnvironmentSampling();
+        checkConstantBackgroundDoesNotBecomeDirectLight();
+        checkCpuPathIgnoresPreviewAmbient();
+        checkEmissiveEndpointShadow();
+        checkWhittedPbrMetalReflectsEnvironment();
         checkTileProgressAndDeterminism();
         checkCpuPathCancellation();
         checkSvgfPreviewFinite();

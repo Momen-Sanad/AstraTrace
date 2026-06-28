@@ -210,7 +210,7 @@ bool frameCameraToScene(const Scene& scene, Camera& camera, float aspect_ratio) 
 
     glm::vec3 center = 0.5f * (bounds.min + bounds.max);
     glm::vec3 extent = bounds.max - bounds.min;
-    float radius = glm::max(0.5f * glm::length(extent), 1.0f);
+    float radius = glm::max(0.5f * glm::length(extent), 0.05f);
     glm::vec3 position = center + glm::vec3(0.0f, 0.25f * radius, 2.4f * radius);
     glm::vec3 forward = glm::normalize(center - position);
 

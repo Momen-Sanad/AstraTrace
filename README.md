@@ -49,6 +49,7 @@ It combines Whitted-style ray tracing, progressive CPU path tracing, textured PB
 - `OIDN` is optional and unavailable in default builds unless Open Image Denoise is enabled and found by CMake.
 - `Contribution` light sampling estimates local light contribution per shading point; it is not a persistent light-tree hierarchy.
 - `KHR_materials_iridescence` is approximated as tinted rough PBR for visibility; true thin-film interference is deferred.
+- Compressed sample variants that require `KHR_texture_basisu`/KTX or `KHR_draco_mesh_compression` are not supported in this CPU-only portfolio pass; use the regular `.gltf` or uncompressed `.glb` scenes.
 - The project is CPU-only. Build output or third-party dependency logs may mention graphics APIs internally, but AstraTrace does not expose a GPU renderer.
 
 ## Tech Stack

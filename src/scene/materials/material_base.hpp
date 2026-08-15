@@ -117,4 +117,12 @@ public:
     virtual bool castsShadows() const {
         return true;
     }
+
+    virtual bool isDoubleSided() const {
+        return true;
+    }
+
+    virtual bool emitsDoubleSided() const {
+        return false;
+    }
 };

@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -34,6 +35,7 @@ public:
     std::shared_ptr<Material> getMaterial() const { return material; }
     ObjectID getID() const { return id; }
     AABB getBounds() const { return world_bounds; }
+    std::size_t primitiveCount() const { return shape ? shape->primitiveCount() : 0; }
     bool isEmissive() const;
 
     void samplePoint(
@@ -79,7 +81,8 @@ private:
         float& distance,
         glm::vec2& uv,
         glm::vec2& uv1,
-        float& pdf
+        float& pdf,
+        float& emitter_cosine
     ) const;
 
     ObjectID id = 0;

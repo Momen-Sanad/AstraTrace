@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <glm/glm.hpp>
 #include "core/ray.hpp"
 
@@ -31,6 +32,7 @@ public:
     virtual AABB getBounds() const = 0;
 
     virtual float surfaceArea() const { return 0.0f; }
+    virtual std::size_t primitiveCount() const { return 1; }
     virtual glm::vec3 geometricNormal(const Ray& ray, const RayHit& hit) const {
         return getSurfaceData(ray, hit).normal;
     }

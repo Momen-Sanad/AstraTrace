@@ -149,7 +149,8 @@ void SceneObject::sampleDirection(
     float& pdf
 ) const {
     glm::vec2 uv1;
-    sampleDirectionDetailed(u, point, direction, distance, uv, uv1, pdf);
+    float emitter_cosine = 1.0f;
+    sampleDirectionDetailed(u, point, direction, distance, uv, uv1, pdf, emitter_cosine);
 }
 
 void SceneObject::sampleDirectionDetailed(
@@ -159,8 +160,10 @@ void SceneObject::sampleDirectionDetailed(
     float& distance,
     glm::vec2& uv,
     glm::vec2& uv1,
-    float& pdf
+    float& pdf,
+    float& emitter_cosine
 ) const {
+    emitter_cosine = 0.0f;
     glm::vec3 sampled_point;
     glm::vec3 sampled_normal;
     samplePoint(u, sampled_point, sampled_normal, uv, uv1, pdf);
@@ -173,15 +176,29 @@ void SceneObject::sampleDirectionDetailed(
     }
     distance = glm::sqrt(distance_squared);
     direction *= 1.0f / distance;
-    float cos_light = glm::abs(glm::dot(sampled_normal, -direction));
+    float cos_light = glm::dot(sampled_normal, -direction);
+    if(!material || material->emitsDoubleSided()) {
+        cos_light = glm::abs(cos_light);
+    }
+    emitter_cosine = glm::max(0.0f, cos_light);
     pdf = cos_light > 1e-5f ? pdf * distance_squared / cos_light : 0.0f;
 }
 
 float SceneObject::computePDF(const Ray& ray, const RayHit& hit) const {
-    if(is_identity_transform) return shape->computePDF(ray, hit);
+    if(is_identity_transform) {
+        if(material && !material->emitsDoubleSided()) {
+            SurfaceData surface = shape->getSurfaceData(ray, hit);
+            if(surface.hit_direction == HitDirection::EXITING) return 0.0f;
+        }
+        return shape->computePDF(ray, hit);
+    }
 
     float area = shape->surfaceArea() * area_scale;
     if(area <= 0.0f) return 0.0f;
+    if(material && !material->emitsDoubleSided()) {
+        SurfaceData surface = getSurfaceData(ray, hit);
+        if(surface.hit_direction == HitDirection::EXITING) return 0.0f;
+    }
     glm::vec3 normal = getGeometricNormal(ray, hit);
     float cos_light = glm::abs(glm::dot(normal, -ray.direction));
     if(cos_light <= 1e-5f) return 0.0f;
@@ -194,7 +211,8 @@ LightEvaluation SceneObject::evaluate(glm::vec3 point) const {
     glm::vec2 uv;
     glm::vec2 uv1;
     float sample_pdf = 0.0f;
-    sampleDirectionDetailed(glm::vec3(0.5f), point, direction, distance, uv, uv1, sample_pdf);
+    float emitter_cosine = 1.0f;
+    sampleDirectionDetailed(glm::vec3(0.5f), point, direction, distance, uv, uv1, sample_pdf, emitter_cosine);
     return {
         .light_vector = direction,
         .distance = distance,
@@ -208,13 +226,15 @@ LightSample SceneObject::sample(glm::vec3 point, const glm::vec3& u) const {
     glm::vec2 uv;
     glm::vec2 uv1;
     float sample_pdf = 0.0f;
-    sampleDirectionDetailed(u, point, direction, distance, uv, uv1, sample_pdf);
+    float emitter_cosine = 1.0f;
+    sampleDirectionDetailed(u, point, direction, distance, uv, uv1, sample_pdf, emitter_cosine);
     return {
         .light_vector = direction,
         .distance = distance,
         .radiance = sample_pdf > 0.0f ? material->sampleEmissive(uv, uv1) : Color(0.0f),
         .pdf = sample_pdf,
-        .delta = false
+        .delta = false,
+        .emitter_cosine = emitter_cosine
     };
 }
 

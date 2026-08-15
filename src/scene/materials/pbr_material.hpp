@@ -175,6 +175,7 @@ public:
     Color emissive_power = Color(0.0f);
     bool contributes_emission_to_lighting = true;
     bool casts_shadows = true;
+    bool double_sided = true;
     mutable bool average_emissive_cache_valid = false;
     mutable Color average_emissive_cache = Color(0.0f);
 
@@ -279,5 +280,9 @@ public:
 
     bool castsShadows() const override {
         return casts_shadows;
+    }
+
+    bool isDoubleSided() const override {
+        return double_sided;
     }
 };

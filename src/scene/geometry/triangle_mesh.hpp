@@ -13,6 +13,7 @@ public:
     SurfaceData getSurfaceData(const Ray& ray, const RayHit& hit) const override;
     AABB getBounds() const override { return bounds; }
     float surfaceArea() const override { return total_area; }
+    std::size_t primitiveCount() const override { return triangles.size(); }
     glm::vec3 geometricNormal(const Ray& ray, const RayHit& hit) const override;
     void samplePoint(
         const glm::vec3& u,

@@ -16,6 +16,7 @@ struct LightSample {
     Color radiance = Color(0.0f);
     float pdf = 0.0f;
     bool delta = true;
+    float emitter_cosine = 1.0f;
 };
 
 class Light {

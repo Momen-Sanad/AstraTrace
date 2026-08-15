@@ -1,6 +1,7 @@
 #include "render/cpu/whitted_integrator.hpp"
 
-#include <array>
+#include <cstddef>
+#include <cstdint>
 #include "render/common/brdf.hpp"
 #include "render/common/normal_mapping.hpp"
 #include "render/common/shadow_utils.hpp"
@@ -9,16 +10,11 @@
 namespace render::cpu {
 namespace {
 
-constexpr std::array<glm::vec3, 8> AREA_LIGHT_PREVIEW_SAMPLES = {
-    glm::vec3(0.19f, 0.73f, 0.06f),
-    glm::vec3(0.62f, 0.31f, 0.19f),
-    glm::vec3(0.38f, 0.87f, 0.31f),
-    glm::vec3(0.81f, 0.48f, 0.44f),
-    glm::vec3(0.12f, 0.22f, 0.56f),
-    glm::vec3(0.55f, 0.64f, 0.69f),
-    glm::vec3(0.29f, 0.41f, 0.81f),
-    glm::vec3(0.91f, 0.14f, 0.94f),
-};
+constexpr int AREA_LIGHT_PREVIEW_SAMPLE_COUNT = 32;
+constexpr int AMBIENT_OCCLUSION_SAMPLE_COUNT = 8;
+constexpr std::size_t AMBIENT_OCCLUSION_PRIMITIVE_LIMIT = 1024;
+constexpr float MIN_AREA_LIGHT_PREVIEW_EMITTER_COSINE = 0.12f;
+constexpr float AREA_LIGHT_PREVIEW_INTENSITY_SCALE = 1.18f;
 constexpr float INV_PI = 0.31830988618f;
 
 float maxChannel(const Color& color) {
@@ -33,6 +29,60 @@ glm::vec3 offsetShadowOrigin(
 ) {
     glm::vec3 offset_normal = glm::dot(normal, direction) >= 0.0f ? normal : -normal;
     return point + ray_epsilon * direction + (4.0f * ray_epsilon) * offset_normal;
+}
+
+float radicalInverseVdc(std::uint32_t bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return static_cast<float>(bits) * 2.3283064365386963e-10f;
+}
+
+glm::vec3 areaLightPreviewSample(int index) {
+    float u = (static_cast<float>(index) + 0.5f) / static_cast<float>(AREA_LIGHT_PREVIEW_SAMPLE_COUNT);
+    float v = radicalInverseVdc(static_cast<std::uint32_t>(index + 1));
+    float w = radicalInverseVdc(static_cast<std::uint32_t>(index + 17));
+    return glm::vec3(u, v, w);
+}
+
+glm::vec3 makeTangent(const glm::vec3& normal) {
+    glm::vec3 up = glm::abs(normal.y) < 0.999f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    return glm::normalize(glm::cross(up, normal));
+}
+
+glm::vec3 hemispherePreviewSample(int index, const glm::vec3& normal) {
+    float u = (static_cast<float>(index) + 0.5f) / static_cast<float>(AMBIENT_OCCLUSION_SAMPLE_COUNT);
+    float v = radicalInverseVdc(static_cast<std::uint32_t>(index + 5));
+    float phi = 6.28318530718f * v;
+    float cos_theta = glm::sqrt(glm::clamp(u, 0.0f, 1.0f));
+    float sin_theta = glm::sqrt(glm::max(0.0f, 1.0f - cos_theta * cos_theta));
+    glm::vec3 tangent = makeTangent(normal);
+    glm::vec3 bitangent = glm::cross(normal, tangent);
+    return glm::normalize(
+        glm::cos(phi) * sin_theta * tangent +
+        glm::sin(phi) * sin_theta * bitangent +
+        cos_theta * normal
+    );
+}
+
+float estimateAmbientVisibility(
+    const Scene& scene,
+    const glm::vec3& position,
+    const glm::vec3& geometric_normal,
+    float max_distance,
+    float ray_epsilon
+) {
+    int visible = 0;
+    for(int sample_index = 0; sample_index < AMBIENT_OCCLUSION_SAMPLE_COUNT; ++sample_index) {
+        glm::vec3 direction = hemispherePreviewSample(sample_index, geometric_normal);
+        Ray ray{offsetShadowOrigin(position, geometric_normal, direction, ray_epsilon), direction};
+        if(!scene.anyHit(ray, max_distance)) ++visible;
+    }
+
+    float visibility = static_cast<float>(visible) / static_cast<float>(AMBIENT_OCCLUSION_SAMPLE_COUNT);
+    return glm::mix(0.48f, 1.0f, visibility);
 }
 
 Color estimatePBRLightContribution(
@@ -50,12 +100,15 @@ Color estimatePBRLightContribution(
     if(maxChannel(sample.radiance) <= 0.0f || sample.pdf <= 0.0f || sample.distance <= 0.0f) {
         return Color(0.0f);
     }
+    if(!sample.delta && sample.emitter_cosine < MIN_AREA_LIGHT_PREVIEW_EMITTER_COSINE) {
+        return Color(0.0f);
+    }
 
     Color contribution = sample.radiance *
         computeLambertDiffuseAndGGXSpecular(albedo, f0, normal, sample.light_vector, view, roughness) /
         sample.pdf;
     if(!sample.delta) {
-        contribution *= INV_PI;
+        contribution *= INV_PI * AREA_LIGHT_PREVIEW_INTENSITY_SCALE;
     }
     if(maxChannel(contribution) <= 1.0f / 255.0f) return Color(0.0f);
 
@@ -65,6 +118,20 @@ Color estimatePBRLightContribution(
         sample.distance - ray_epsilon
     );
     return contribution * shadow;
+}
+
+Color previewVisibleEmission(
+    const PBRMaterial& material,
+    const SurfaceData& surface,
+    const glm::vec3& view,
+    const glm::vec3& geometric_normal
+) {
+    Color emission = material.sampleEmissive(surface);
+    if(maxChannel(emission) <= 0.0f) return emission;
+
+    float view_cosine = glm::abs(glm::dot(glm::normalize(geometric_normal), glm::normalize(view)));
+    float facing_weight = glm::smoothstep(0.18f, 0.72f, view_cosine);
+    return emission * facing_weight;
 }
 
 }
@@ -99,12 +166,21 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
 
             Color outgoing_radiance = Color(0.0f);
             if(alpha > 0.0f) {
-                Color ambient_diffuse = scene.getAmbient() * albedo * occlusion;
+                float ambient_visibility = 1.0f;
+                if(object->primitiveCount() <= AMBIENT_OCCLUSION_PRIMITIVE_LIMIT) {
+                    float ambient_distance = glm::clamp(hit.distance * 0.05f, 0.12f, 0.48f);
+                    ambient_visibility = estimateAmbientVisibility(
+                        scene, position, geometric_normal, ambient_distance, ray_epsilon
+                    );
+                }
+                Color ambient_diffuse = scene.getAmbient() * albedo * occlusion * ambient_visibility;
                 Color ambient_specular = scene.getAmbient()
                     * F0
                     * glm::mix(0.08f, 0.42f, metalness)
-                    * (1.0f - 0.45f * glm::clamp(roughness, 0.0f, 1.0f));
-                outgoing_radiance = ambient_diffuse + ambient_specular + pbr->sampleEmissive(surface);
+                    * (1.0f - 0.45f * glm::clamp(roughness, 0.0f, 1.0f))
+                    * ambient_visibility;
+                outgoing_radiance = ambient_diffuse + ambient_specular +
+                    previewVisibleEmission(*pbr, surface, view, geometric_normal);
                 const auto& preview_lights = scene.getPathLights().empty()
                     ? scene.getLights()
                     : scene.getPathLights();
@@ -112,7 +188,7 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
                     if(!light) continue;
                     if(!light->isDelta()) {
                         Color light_sum(0.0f);
-                        for(const glm::vec3& sample_u : AREA_LIGHT_PREVIEW_SAMPLES) {
+                        for(int sample_index = 0; sample_index < AREA_LIGHT_PREVIEW_SAMPLE_COUNT; ++sample_index) {
                             light_sum += estimatePBRLightContribution(
                                 scene,
                                 position,
@@ -122,11 +198,11 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
                                 albedo,
                                 F0,
                                 roughness,
-                                light->sample(position, sample_u),
+                                light->sample(position, areaLightPreviewSample(sample_index)),
                                 ray_epsilon
                             );
                         }
-                        outgoing_radiance += light_sum / static_cast<float>(AREA_LIGHT_PREVIEW_SAMPLES.size());
+                        outgoing_radiance += light_sum / static_cast<float>(AREA_LIGHT_PREVIEW_SAMPLE_COUNT);
                         continue;
                     }
 
@@ -143,6 +219,8 @@ Color WhittedIntegrator::traceRecursive(const Scene& scene, const Ray& ray, int 
                         outgoing_radiance += light_contribution * shadow;
                     }
                 }
+                float diffuse_contact = glm::mix(0.76f, 1.0f, ambient_visibility);
+                outgoing_radiance *= glm::mix(diffuse_contact, 1.0f, metalness);
             }
 
             if(alpha < 1.0f && depth > 0) {

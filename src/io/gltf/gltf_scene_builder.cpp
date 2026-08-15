@@ -246,7 +246,10 @@ GltfSceneLoadResult buildSceneFromGltfModel(
                 result.warning,
                 "No glTF punctual lights found. Using emissive geometry as physical area lights."
             );
-            scene.setAmbient(Color(0.06f));
+            // Authored emissive scenes should primarily be lit by their mesh lights.
+            // Keep only a tiny occlusion-aware Whitted preview lift so closed rooms do
+            // not get flattened by fake global fill.
+            scene.setAmbient(Color(0.070f, 0.062f, 0.050f));
         }
         scene.setBackgroundColor(Color(0.0f));
     } else {

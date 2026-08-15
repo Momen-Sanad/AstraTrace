@@ -29,18 +29,22 @@ std::shared_ptr<PBRMaterial> makePbr(ColorA tint, float metallic, float roughnes
 void buildMaterialShowcaseScene(Scene& scene, Camera& camera, float aspect_ratio) {
     scene.clear();
 
-    camera.setPosition(glm::vec3(0.0f, 1.25f, 5.8f));
+    camera.setPosition(glm::vec3(0.0f, 1.08f, 6.9f));
     camera.setRotation(
-        glm::normalize(glm::vec3(0.0f, -0.12f, -1.0f)),
+        glm::normalize(glm::vec3(0.0f, -0.08f, -1.0f)),
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    camera.setHalfSize(glm::radians(48.0f), aspect_ratio);
+    camera.setHalfSize(glm::radians(44.0f), aspect_ratio);
 
     auto floor_material = makePbr(ColorA(0.62f, 0.62f, 0.58f, 1.0f), 0.0f, 0.72f);
-    auto wall_material = makePbr(ColorA(0.45f, 0.50f, 0.58f, 1.0f), 0.0f, 0.82f);
-    auto dielectric = makePbr(ColorA(0.95f, 0.28f, 0.20f, 1.0f), 0.0f, 0.45f);
-    auto rough_metal = makePbr(ColorA(0.86f, 0.70f, 0.36f, 1.0f), 1.0f, 0.34f);
-    auto emitter = makePbr(ColorA(1.0f), 0.0f, 0.35f, Color(10.0f, 8.2f, 5.5f));
+    auto wall_material = makePbr(ColorA(0.42f, 0.47f, 0.54f, 1.0f), 0.0f, 0.82f);
+    auto chrome = makePbr(ColorA(0.92f, 0.95f, 1.0f, 1.0f), 1.0f, 0.08f);
+    auto gold = makePbr(ColorA(0.95f, 0.76f, 0.34f, 1.0f), 1.0f, 0.24f);
+    auto rough_copper = makePbr(ColorA(0.80f, 0.42f, 0.23f, 1.0f), 1.0f, 0.62f);
+    auto glossy_dielectric = makePbr(ColorA(0.95f, 0.18f, 0.12f, 1.0f), 0.0f, 0.18f);
+    auto rough_dielectric = makePbr(ColorA(0.20f, 0.42f, 0.95f, 1.0f), 0.0f, 0.78f);
+    auto emissive_sphere = makePbr(ColorA(0.40f, 0.90f, 1.0f, 1.0f), 0.0f, 0.28f, Color(0.25f, 0.75f, 1.1f));
+    auto emitter = makePbr(ColorA(1.0f), 0.0f, 0.35f, Color(8.5f, 7.4f, 5.4f));
 
     auto mirror = std::make_shared<SmoothMirrorMaterial>();
     mirror->tint = Color(0.92f, 0.96f, 1.0f);
@@ -52,16 +56,16 @@ void buildMaterialShowcaseScene(Scene& scene, Camera& camera, float aspect_ratio
     scene.createObject(
         createRectange(
             glm::vec3(0.0f, -0.72f, 0.0f),
-            glm::vec2(7.0f, 6.0f),
+            glm::vec2(9.4f, 6.4f),
             glm::angleAxis(-glm::half_pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f)),
-            glm::vec2(4.0f)
+            glm::vec2(5.0f)
         ),
         floor_material
     );
     scene.createObject(
         createRectange(
-            glm::vec3(0.0f, 1.65f, -2.25f),
-            glm::vec2(7.0f, 4.8f),
+            glm::vec3(0.0f, 1.58f, -2.15f),
+            glm::vec2(9.4f, 4.7f),
             glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec2(2.0f)
         ),
@@ -69,18 +73,24 @@ void buildMaterialShowcaseScene(Scene& scene, Camera& camera, float aspect_ratio
     );
     scene.createObject(
         createRectange(
-            glm::vec3(0.0f, 3.0f, -0.35f),
-            glm::vec2(2.0f, 1.0f),
+            glm::vec3(0.0f, 2.95f, -0.15f),
+            glm::vec2(2.6f, 1.0f),
             glm::angleAxis(glm::half_pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f)),
             glm::vec2(1.0f)
         ),
         emitter
     );
 
-    scene.createObject(std::make_shared<Sphere>(glm::vec3(-2.25f, 0.0f, 0.0f), 0.72f), glass);
-    scene.createObject(std::make_shared<Sphere>(glm::vec3(-0.75f, 0.0f, 0.0f), 0.72f), mirror);
-    scene.createObject(std::make_shared<Sphere>(glm::vec3(0.75f, 0.0f, 0.0f), 0.72f), rough_metal);
-    scene.createObject(std::make_shared<Sphere>(glm::vec3(2.25f, 0.0f, 0.0f), 0.72f), dielectric);
+    const float radius = 0.46f;
+    const float y = -0.26f;
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(-3.65f, y, 0.0f), radius), glass);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(-2.60f, y, 0.0f), radius), mirror);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(-1.55f, y, 0.0f), radius), chrome);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(-0.50f, y, 0.0f), radius), gold);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(0.55f, y, 0.0f), radius), rough_copper);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(1.60f, y, 0.0f), radius), glossy_dielectric);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(2.65f, y, 0.0f), radius), rough_dielectric);
+    scene.createObject(std::make_shared<Sphere>(glm::vec3(3.70f, y, 0.0f), radius), emissive_sphere);
 
     scene.addLight(std::make_shared<DirectionLight>(
         glm::normalize(glm::vec3(-0.35f, -1.0f, -0.45f)),

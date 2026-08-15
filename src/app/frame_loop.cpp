@@ -414,6 +414,8 @@ bool FrameLoop::reloadScene(const std::string& scene_path) {
     scene.update();
     if(!load_result.camera_loaded) {
         frameCameraToScene(scene, loaded_camera, aspect_ratio);
+    } else {
+        loaded_camera.setHalfSize(loaded_camera.getFovY(), aspect_ratio);
     }
     camera = loaded_camera;
     controller.resetFromCamera();

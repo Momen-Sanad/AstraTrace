@@ -341,6 +341,8 @@ bool prepareScene(
     scene.update();
     if(!load_result.camera_loaded) {
         frameCameraToScene(scene, camera, aspect_ratio);
+    } else {
+        camera.setHalfSize(camera.getFovY(), aspect_ratio);
     }
     if(!config.environment_path.empty()) {
         auto environment = loadColorImageAnyDepth(config.environment_path.string().c_str(), true);

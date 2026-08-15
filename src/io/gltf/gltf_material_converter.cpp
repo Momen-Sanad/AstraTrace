@@ -185,6 +185,7 @@ std::shared_ptr<Material> createMaterialFromGLTF(
     }
 
     auto pbr = std::make_shared<PBRMaterial>();
+    pbr->double_sided = material.doubleSided;
 
     pbr->tint = ColorA(
         static_cast<float>(mr.baseColorFactor.size() > 0 ? mr.baseColorFactor[0] : 1.0),

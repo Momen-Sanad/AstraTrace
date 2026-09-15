@@ -1,4 +1,4 @@
-# AstraTrace
+# AstraTrace.
 
 AstraTrace is a C++20 physically based software renderer for glTF 2.0 scenes.
 It combines Whitted-style ray tracing, progressive CPU path tracing, textured PBR materials, and an interactive SDL/ImGui viewer.
